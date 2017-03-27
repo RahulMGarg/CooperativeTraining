@@ -10,10 +10,10 @@ from tensorflow.examples.tutorials.mnist import mnist
 
 FLAGS = None
 
-def placeholder_inputs(batch_size=64):
+def placeholder_inputs(batch_size=100):
     images_placeholder = tf.placeholder(tf.float32, shape=(batch_size,
-                                                         mnist.IMAGE_PIXELS))
-    labels_placeholder = tf.placeholder(tf.int32, shape=(batch_size))
+                                                         28, 28, 1))
+    labels_placeholder = tf.placeholder(tf.int32, shape=(batch_size, 10))
     return images_placeholder, labels_placeholder
 
 def build_model(images, num_classes=10):
@@ -83,9 +83,10 @@ def main(_):
         # See `tf.train.SyncReplicasOptimizer` for additional details on how to
         # perform *synchronous* training.
         # mon_sess.run handles AbortedError in case of preempted PS.
-        batch_x, batch_y = data_set.next_batch(FLAGS.batch_size, FLAGS.fake_data)
+        #print(dir(data_sets))
+        batch_x, batch_y = data_sets.train.next_batch(FLAGS.batch_size, FLAGS.fake_data)
         _, cost, step = mon_sess.run([train_op, loss, global_step], 
-                                     feed_dict={images: batch_x, labels: batch_y})
+                                     feed_dict={images: batch_x.reshape((-1,28,28,1)), labels: batch_y})
 
 if __name__ == "__main__":
   parser = argparse.ArgumentParser()
