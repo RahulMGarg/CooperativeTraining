@@ -27,7 +27,11 @@ def build_model(images, num_classes=10):
         net = slim.fully_connected(net, num_classes, activation_fn=None)       
         return net
 
+def get_batch():
+    return batch_x, batch_y
+
 def main(_):
+  data_sets = input_data.read_data_sets(FLAGS.input_data_dir, FLAGS.fake_data, one_hot=True)
   ps_hosts = FLAGS.ps_hosts.split(",")
   worker_hosts = FLAGS.worker_hosts.split(",")
   #print(ps_hosts)
@@ -52,7 +56,7 @@ def main(_):
       # Build model...
       images, labels = placeholder_inputs()
       logits = build_model(images)
-      slim.losses.softmax_cross_entropy(logits, one_hot_labels)
+      slim.losses.softmax_cross_entropy(logits, labels)
       loss = slim.losses.get_total_loss()
       #loss = slim.losses.softmax_cross_entropy(predictions, labels)
       #names_to_values, names_to_updates = slim.metrics.aggregate_metric_map({
@@ -65,7 +69,7 @@ def main(_):
           loss, global_step=global_step)
 
     # The StopAtStepHook handles stopping after running given steps.
-    hooks=[tf.train.StopAtStepHook(last_step=1000000)]
+    hooks=[tf.train.StopAtStepHook(last_step=FLAGS.max_steps)]
 
     # The MonitoredTrainingSession takes care of session initialization,
     # restoring from a checkpoint, saving to a checkpoint, and closing when done
@@ -79,7 +83,9 @@ def main(_):
         # See `tf.train.SyncReplicasOptimizer` for additional details on how to
         # perform *synchronous* training.
         # mon_sess.run handles AbortedError in case of preempted PS.
-        mon_sess.run(train_op)
+        batch_x, batch_y = data_set.next_batch(FLAGS.batch_size, FLAGS.fake_data)
+        _, cost, step = mon_sess.run([train_op, loss, global_step], 
+                                     feed_dict={images: batch_x, labels: batch_y})
 
 if __name__ == "__main__":
   parser = argparse.ArgumentParser()
@@ -110,5 +116,35 @@ if __name__ == "__main__":
       default=0,
       help="Index of task within the job"
   )
+
+  # Flags for training settings
+  parser.add_argument(
+      "--batch_size",
+      type=int,
+      default=100,
+      help="Batch size.  Must divide evenly into the dataset sizes."
+  )
+
+  parser.add_argument(
+      "--input_data_dir",
+      type=str,
+      default='/tmp/tensorflow/mnist/input_data',
+      help="Directory to put the input data."
+  )
+
+  parser.add_argument(
+      '--fake_data',
+      default=False,
+      help='If true, uses fake data for unit testing.',
+      action='store_true'
+  )
+
+  parser.add_argument(
+      '--max_steps',
+      type=int,
+      default=100000,
+      help='Number of steps to run trainer.'
+  )
+
   FLAGS, unparsed = parser.parse_known_args()
   tf.app.run(main=main, argv=[sys.argv[0]] + unparsed)
