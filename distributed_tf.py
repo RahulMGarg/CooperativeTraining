@@ -92,12 +92,13 @@ def main(_):
     
     # set up parameter server variables
     ps_variables, ps_init = replicate_vars_on_ps(local_variables, "/job:ps/task:0")
-    global_init = tf.global_variables_initializer()
     
     with tf.device("/job:worker/task:%d" % FLAGS.task_index):
       # build optimization procedure
       slim.losses.softmax_cross_entropy(logits, labels)
       loss = slim.losses.get_total_loss()
+
+      tf.summary.scalar('loss', loss)
 
       opt = tf.train.AdagradOptimizer(0.01)
 
@@ -112,21 +113,25 @@ def main(_):
 
     saver = tf.train.Saver(sharded=True)
     is_chief = FLAGS.task_index == 0
+    merged_summaries = tf.summary.merge_all()
+    global_init = tf.global_variables_initializer()
 
-    with tf.Session(server.target) as mon_sess:
+    with tf.Session(server.target) as sess:
       i = 0
       print('Starting training')
       if is_chief:
         # Copy the chief's initialization to the parameter server
-        mon_sess.run(global_init)
-        mon_sess.run(ps_init)
+        sess.run(global_init)
+        sess.run(ps_init)
+        train_writer = tf.summary.FileWriter(FLAGS.log_location + FLAGS.experiment,
+                                      sess.graph)
 
       while True:
         # Run a training step asynchronously.
         # See `tf.train.SyncReplicasOptimizer` for additional details on how to
         # perform *synchronous* training.
-        # mon_sess.run handles AbortedError in case of preempted PS.
-        mon_sess.run(get_ps_state)
+        # sess.run handles AbortedError in case of preempted PS.
+        sess.run(get_ps_state)
 
         if FLAGS.slow:
             pause = np.random.rand() * 2
@@ -134,12 +139,15 @@ def main(_):
             time.sleep(pause)
 
         batch_x, batch_y = data_sets.train.next_batch(FLAGS.batch_size, FLAGS.fake_data)
-        _, cost, step, lr_weight = mon_sess.run([train_op, loss, global_step, lr_offset], 
-                                    feed_dict={images: batch_x.reshape((-1,28,28,1)), labels: batch_y})
+        feed_dict = {images: batch_x.reshape((-1,28,28,1)), labels: batch_y}
+        _, cost, step, summary, lr_weight = sess.run([train_op, loss, global_step, merged_summaries, lr_offset], 
+                                    feed_dict=feed_dict)
+        if is_chief:
+            train_writer.add_summary(summary, global_step=step)
 
         print('Step: %d, cost: %f, lr_weight: %f' % (step, cost, lr_weight))
         if is_chief and step % 1000 == 0:
-            saver.save(mon_sess, '/tmp/train_logs/')
+            saver.save(sess, FLAGS.log_location + FLAGS.experiment + '/logs')
 
         if step == FLAGS.max_steps:
             break
@@ -154,6 +162,21 @@ if __name__ == "__main__":
       default="",
       help="Comma-separated list of hostname:port pairs"
   )
+
+  parser.add_argument(
+      "--log_location",
+      type=str,
+      default="/tmp/distributed_training/",
+      help="Directory for log storage"
+  )
+
+  parser.add_argument(
+      "--experiment",
+      type=str,
+      default="/cooptimization/",
+      help="Experiment name"
+  )
+
   parser.add_argument(
       "--worker_hosts",
       type=str,
