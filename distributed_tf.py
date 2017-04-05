@@ -72,7 +72,6 @@ def main(_):
   worker_hosts = FLAGS.worker_hosts.split(",")
   # Create a cluster from the parameter server and worker hosts.
   cluster = tf.train.ClusterSpec({"ps": ps_hosts, "worker": worker_hosts})
-  print(worker_hosts)
 
   # Create and start a server for the local task.
   server = tf.train.Server(cluster,
@@ -82,23 +81,21 @@ def main(_):
   if FLAGS.job_name == "ps":
     server.join()
   elif FLAGS.job_name == "worker":
-
-    # Assigns ops to the local worker by default.
-    #with tf.device(tf.train.replica_device_setter(
-    #    worker_device="/job:worker/task:%d" % FLAGS.task_index,
-    #    cluster=cluster)):
-    with tf.device("/job:ps/task:0"):
-        global_step = tf.contrib.framework.get_or_create_global_step()
     with tf.device("/job:worker/task:%d" % FLAGS.task_index):
-      # Build model...
+      # Build model and set up local variables
       images, labels = placeholder_inputs(name_scope='worker_%d' % FLAGS.task_index)
       logits = build_model(images, name_scope='worker_%d' % FLAGS.task_index)
       local_variables = tf.trainable_variables()
 
+    with tf.device("/job:ps/task:0"):
+      global_step = tf.contrib.framework.get_or_create_global_step()
+    
+    # set up parameter server variables
     ps_variables, ps_init = replicate_vars_on_ps(local_variables, "/job:ps/task:0")
     global_init = tf.global_variables_initializer()
     
     with tf.device("/job:worker/task:%d" % FLAGS.task_index):
+      # build optimization procedure
       slim.losses.softmax_cross_entropy(logits, labels)
       loss = slim.losses.get_total_loss()
 
@@ -106,38 +103,25 @@ def main(_):
 
       get_ps_state = copy_variables(local_variables, ps_variables)
       grads_and_vars = opt.compute_gradients(loss, local_variables)
-      lr_offset = weighting(join_parameters(local_variables), join_parameters(ps_variables))
+      lr_offset = weighting(join_parameters(local_variables), join_parameters(ps_variables), sig=(1./FLAGS.sharpness))
 
       weighted_grads_and_vars = []
       for (g_loc, v_loc), v_ps in zip(grads_and_vars, ps_variables):
         weighted_grads_and_vars.append((g_loc * lr_offset, v_ps))
       train_op = opt.apply_gradients(weighted_grads_and_vars, global_step)
 
-    # The StopAtStepHook handles stopping after running given steps.
-    hooks=[tf.train.StopAtStepHook(last_step=FLAGS.max_steps)]
+    saver = tf.train.Saver(sharded=True)
+    is_chief = FLAGS.task_index == 0
 
-    # The MonitoredTrainingSession takes care of session initialization,
-    # restoring from a checkpoint, saving to a checkpoint, and closing when done
-    # or an error occurs.
-    print('Job name: %s, Task index: %d' % (FLAGS.job_name, FLAGS.task_index))
-    master = server.target
-    #master = 'grpc://localhost:2224'
-    #print(master)
-    #sv = tf.train.Supervisor(logdir='/tmp/train_logs/', is_chief=(FLAGS.task_index == 1))
-    #with sv.managed_session(master) as mon_sess:
-    with tf.train.MonitoredTrainingSession(master=master,
-                                            is_chief=(FLAGS.task_index == 0),
-                                            checkpoint_dir="/tmp/train_logs",
-                                            hooks=hooks) as mon_sess:
-
+    with tf.Session(server.target) as mon_sess:
       i = 0
       print('Starting training')
-      if FLAGS.task_index == 0:
+      if is_chief:
         # Copy the chief's initialization to the parameter server
-        # mon_sess.run(global_init)
+        mon_sess.run(global_init)
         mon_sess.run(ps_init)
 
-      while not mon_sess.should_stop():
+      while True:
         # Run a training step asynchronously.
         # See `tf.train.SyncReplicasOptimizer` for additional details on how to
         # perform *synchronous* training.
@@ -154,6 +138,11 @@ def main(_):
                                     feed_dict={images: batch_x.reshape((-1,28,28,1)), labels: batch_y})
 
         print('Step: %d, cost: %f, lr_weight: %f' % (step, cost, lr_weight))
+        if is_chief and step % 1000 == 0:
+            saver.save(mon_sess, '/tmp/train_logs/')
+
+        if step == FLAGS.max_steps:
+            break
 
 if __name__ == "__main__":
   parser = argparse.ArgumentParser()
@@ -218,6 +207,13 @@ if __name__ == "__main__":
       '--slow',
       action='store_true',
       help='Slow down training.'
+  )
+
+  parser.add_argument(
+      "--sharpness",
+      type=float,
+      default=2.,
+      help="How sharply we penalize incorrect parameter predictions."
   )
 
   FLAGS, unparsed = parser.parse_known_args()
