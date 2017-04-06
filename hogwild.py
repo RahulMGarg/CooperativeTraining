@@ -8,16 +8,19 @@ import numpy as np
 
 import tensorflow as tf
 import tensorflow.contrib.slim as slim
-from tensorflow.examples.tutorials.mnist import input_data
-from tensorflow.examples.tutorials.mnist import mnist
 
-from distributed_tf import placeholder_inputs, build_model
+from cooptimization import placeholder_inputs, build_model, input_data, DEFAULT_BASE_DIRECTORY
 
 FLAGS = None
 
 def main(_):
   data_sets = input_data.read_data_sets(FLAGS.input_data_dir, FLAGS.fake_data, one_hot=True)
-  ps_hosts = FLAGS.ps_hosts.split(",")
+  if FLAGS.ps_hosts == "":
+    with open('hogwild_ps_host.txt') as f:
+        ps_hosts = [f.readlines()[0].strip() + ':2222']
+  else:
+    ps_hosts = FLAGS.ps_hosts.split(",")
+
   worker_hosts = FLAGS.worker_hosts.split(",")
   # Create a cluster from the parameter server and worker hosts.
   cluster = tf.train.ClusterSpec({"ps": ps_hosts, "worker": worker_hosts})
@@ -47,6 +50,10 @@ def main(_):
       opt = tf.train.AdagradOptimizer(0.01)
 
       train_op = opt.minimize(loss, global_step=global_step)
+
+      correct_prediction = tf.equal(tf.argmax(logits, 1), tf.argmax(labels, 1))
+      accuracy = tf.reduce_mean(tf.cast(correct_prediction, "float"))
+      tf.summary.scalar('accuracy', accuracy)
 
     is_chief = FLAGS.task_index == 0
     merged_summaries = tf.summary.merge_all()
@@ -89,7 +96,7 @@ if __name__ == "__main__":
   parser.add_argument(
       "--log_location",
       type=str,
-      default="/tmp/distributed_training/",
+      default= DEFAULT_BASE_DIRECTORY + "/distributed_training/",
       help="Directory for log storage"
   )
 
@@ -131,7 +138,7 @@ if __name__ == "__main__":
   parser.add_argument(
       "--input_data_dir",
       type=str,
-      default='/tmp/tensorflow/mnist/input_data',
+      default=DEFAULT_BASE_DIRECTORY + '/tensorflow/mnist/input_data',
       help="Directory to put the input data."
   )
 
@@ -145,7 +152,7 @@ if __name__ == "__main__":
   parser.add_argument(
       '--max_steps',
       type=int,
-      default=100000,
+      default=1000,
       help='Number of steps to run trainer.'
   )
 

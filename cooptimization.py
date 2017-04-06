@@ -14,6 +14,7 @@ from tensorflow.examples.tutorials.mnist import mnist
 from coop_training_optimizer import CooperativeReplicasOptimizer
 
 FLAGS = None
+DEFAULT_BASE_DIRECTORY = '/tmp'
 
 def placeholder_inputs(batch_size=100, name_scope=None):
     with tf.name_scope(name_scope, 'Data'):
@@ -68,7 +69,11 @@ def get_batch():
 
 def main(_):
   data_sets = input_data.read_data_sets(FLAGS.input_data_dir, FLAGS.fake_data, one_hot=True)
-  ps_hosts = FLAGS.ps_hosts.split(",")
+  if FLAGS.ps_hosts == "":
+    with open('cooptimization.txt') as f:
+        ps_hosts = [f.readlines()[0].strip() + ':2222']
+  else:
+    ps_hosts = FLAGS.ps_hosts.split(",")
   worker_hosts = FLAGS.worker_hosts.split(",")
   # Create a cluster from the parameter server and worker hosts.
   cluster = tf.train.ClusterSpec({"ps": ps_hosts, "worker": worker_hosts})
@@ -110,6 +115,10 @@ def main(_):
       for (g_loc, v_loc), v_ps in zip(grads_and_vars, ps_variables):
         weighted_grads_and_vars.append((g_loc * lr_offset, v_ps))
       train_op = opt.apply_gradients(weighted_grads_and_vars, global_step)
+
+      correct_prediction = tf.equal(tf.argmax(logits, 1), tf.argmax(labels, 1))
+      accuracy = tf.reduce_mean(tf.cast(correct_prediction, "float"))
+      tf.summary.scalar('accuracy', accuracy)
 
     saver = tf.train.Saver(sharded=True)
     is_chief = FLAGS.task_index == 0
@@ -166,7 +175,7 @@ if __name__ == "__main__":
   parser.add_argument(
       "--log_location",
       type=str,
-      default="/tmp/distributed_training/",
+      default= DEFAULT_BASE_DIRECTORY + "/distributed_training/",
       help="Directory for log storage"
   )
 
@@ -208,7 +217,7 @@ if __name__ == "__main__":
   parser.add_argument(
       "--input_data_dir",
       type=str,
-      default='/tmp/tensorflow/mnist/input_data',
+      default=DEFAULT_BASE_DIRECTORY + '/tensorflow/mnist/input_data',
       help="Directory to put the input data."
   )
 
@@ -222,7 +231,7 @@ if __name__ == "__main__":
   parser.add_argument(
       '--max_steps',
       type=int,
-      default=100000,
+      default=1000,
       help='Number of steps to run trainer.'
   )
 
