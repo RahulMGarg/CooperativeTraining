@@ -14,7 +14,7 @@ ada_template = """#!/bin/sh
 #PBS -l mem={{ memory }}
 #PBS -j eo
 #PBS -N {{ name }}
-#PBS -t 1-{{ num_jobs }}
+#PBS -t {{ start_job }}{% if multiple_jobs %}-{{ end_job }}{% endif %}
 
 cd {{ path }}
 {% if gpu %}export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:"{{ cuda_path }}lib64"
@@ -35,15 +35,18 @@ esac
 {% endif %}eval $(python {{ cuda_assigner }}run_client.py --release --jobid $PBS_ARRAYID)
 """
 
-def format_joblist(joblist):
-    return [(i+1,j) for i,j in enumerate(joblist)]
+def format_joblist(joblist, zero_index):
+    return [(i+1 * (not zero_index),j) for i,j in enumerate(joblist)]
 
 def populate_template(name, joblist, path=os.getcwd(), gpu=True, 
                       walltime='36:00:00', memory='2000mb', theano=True,
-                      preamble=[], cuda_path=CUDA_DIRECTORY, cuda_assigner=CUDA_ASSIGNER):
+                      preamble=[], cuda_path=CUDA_DIRECTORY, cuda_assigner=CUDA_ASSIGNER,
+                      zero_index=False):
     args = locals()
-    args['num_jobs'] = len(joblist)
-    args['joblist'] = format_joblist(joblist)
+    args['end_job'] = len(joblist) - int(zero_index)
+    args['start_job'] = int(not zero_index)
+    args['multiple_jobs'] = len(joblist) > 1
+    args['joblist'] = format_joblist(joblist, zero_index)
     template = Template(ada_template)
     return template.render(args)
 
@@ -72,6 +75,17 @@ def parse_joblist(joblist):
             out.append(eval('[' + i + ']'))
     return [commands % i for i in product(*out)]
 
+def write_pbs_file(filename, pbs_text, force=False):
+    '''
+    Safely write PBS file to disk. A
+    '''
+    if os.path.exists(filename) and (not force):
+            response = raw_input("PBS file %s already exists. Overwrite? Y / N \n" % filename)
+            if response.lower() != 'y':
+                return None
+    with open(filename, 'w') as f:
+        f.write(pbs_text)
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -98,7 +112,7 @@ def main():
 
     parser.add_argument(
         "-f",
-        action="store_false",
+        action="store_true",
         help="Force overwriting of existing PBS files"
     )
     
@@ -138,13 +152,7 @@ def main():
         print(pbs_text)
     else:
         filename = args.name + '.pbs'
-        # Confirm overwiting. If the -f flag is used, this check will be ignored.
-        if os.path.exists(filename) and args.f:
-            response = raw_input("PBS file %s already exists. Overwrite? Y / N \n" % filename)
-            if response.lower() == 'n':
-                exit()
-        with open(filename, 'w') as f:
-            f.write(pbs_text)
+        write_pbs_file(filename, pbs_text, args.f)
 
 if __name__ == '__main__':
     import sys
