@@ -16,6 +16,52 @@ from coop_training_optimizer import CooperativeReplicasOptimizer
 FLAGS = None
 DEFAULT_BASE_DIRECTORY = '/tmp'
 
+class OnlineUpdate(object):
+    def __init__(self, grads_and_vars):
+        self.variables = [v for g,v in grads_and_vars]
+        self.grads = [g for g,v in grads_and_vars]
+        
+        with tf.name_scope('OnlinePrediction'):
+            self.locals = []
+            self.prev_prediction = []
+            for v in self.variables:
+                W_p = tf.Variable(tf.ones_like(v), trainable=False, name='W_parameter')
+                W_g = tf.Variable(tf.zeros_like(v), trainable=False, name='W_grad')
+                bias = tf.Variable(tf.ones_like(v), trainable=False, name='bias')
+                p = tf.Variable(tf.zeros_like(v), trainable=False, name=v.name + '_prediction')
+                self.prev_prediction.append(p)
+                self.locals.append((W_p, W_g, bias))
+    
+    def get_predict_op():
+        predict_op = []
+        for v, g, w, p in zip(self.variables, self.grads, self.locals, self.prev_prediction):
+            prediction = v * w[0] + g * w[1] + w[2]
+            predict_op.append(tf.assign(v, prediction))
+            predict_op.append(tf.assign(p, prediction))
+        return predict_op
+    
+    def update_variables(true_values, lr = 0.001, update='sgd', eps = 1e-6):
+        update_op = []
+        if update == 'adagrad':
+            h_list = []
+        for y, v, g, w in zip(true_values, self.prev_prediction, self.grads, self.locals):
+            y_hat = v * w[0] + g * w[1] + w[2]
+            diff = (y - y_hat)
+            d_yhat = [(w[0], v), (w[1],g), (w[2], 1)]
+            for weight, partial in d_yhat:
+                gradient = -2 * diff * partial
+                if update == 'sgd':
+                    update_op.append(tf.assign(weight, weight - lr * gradient))
+                elif update == 'adagrad':
+                    with tf.name_scope('OnlineAdagrad'):
+                        h = tf.Variable(tf.zeros_like(weight), trainable=False, name=weight)
+                    h_list.append(h)
+                    update_op.append(tf.assign(h, h + tf.square(gradient)))
+                    gradient = gradient / (eps + tf.sqrt(h))
+                    update_op.append(tf.assign(weight, weight - lr * gradient))
+        return update_op
+
+
 def placeholder_inputs(batch_size=100, name_scope=None):
     with tf.name_scope(name_scope, 'Data'):
         images_placeholder = tf.placeholder(tf.float32, shape=(batch_size,
@@ -68,7 +114,7 @@ def get_batch():
     return batch_x, batch_y
 
 def main(_):
-  data_sets = input_data.read_data_sets(FLAGS.input_data_dir, FLAGS.fake_data, one_hot=True)
+  data_sets = input_data.load_mnist(FLAGS.input_data_dir)
   if FLAGS.ps_hosts == "":
     with open('cooptimization.txt') as f:
         ps_hosts = [f.readlines()[0].strip() + ':2222']
@@ -97,7 +143,7 @@ def main(_):
     
     # set up parameter server variables
     ps_variables, ps_init = replicate_vars_on_ps(local_variables, "/job:ps/task:0")
-    
+    predict_future = FLAGS.predict_future
     with tf.device("/job:worker/task:%d" % FLAGS.task_index):
       # build optimization procedure
       slim.losses.softmax_cross_entropy(logits, labels)
@@ -109,6 +155,11 @@ def main(_):
 
       get_ps_state = copy_variables(local_variables, ps_variables)
       grads_and_vars = opt.compute_gradients(loss, local_variables)
+      if predict_future:
+        online_update = OnlineUpdate(grads_and_vars)
+        predict_op = online_update.get_predict_op()
+        update_op = online_update.update_variables(ps_variables)
+      
       lr_offset = weighting(join_parameters(local_variables), join_parameters(ps_variables), sig=(1./FLAGS.sharpness))
 
       weighted_grads_and_vars = []
@@ -149,8 +200,16 @@ def main(_):
 
         batch_x, batch_y = data_sets.train.next_batch(FLAGS.batch_size, FLAGS.fake_data)
         feed_dict = {images: batch_x.reshape((-1,28,28,1)), labels: batch_y}
-        _, cost, step, summary, lr_weight = sess.run([train_op, loss, global_step, merged_summaries, lr_offset], 
-                                    feed_dict=feed_dict)
+        if predict_future:
+            _ = sess.run(predict_op, feed_dict=feed_dict)
+
+        if predict_future:
+            _, cost, step, summary, lr_weight, _ = sess.run([train_op, loss, global_step, merged_summaries, lr_offset, update_op], 
+                                        feed_dict=feed_dict)
+        else:
+            _, cost, step, summary, lr_weight = sess.run([train_op, loss, global_step, merged_summaries, lr_offset], 
+                                        feed_dict=feed_dict)
+
         if is_chief:
             train_writer.add_summary(summary, global_step=step)
 
@@ -219,6 +278,13 @@ if __name__ == "__main__":
       type=str,
       default=DEFAULT_BASE_DIRECTORY + '/tensorflow/mnist/input_data',
       help="Directory to put the input data."
+  )
+
+  parser.add_argument(
+      '--predict_future',
+      default=False,
+      help='Predict future states.',
+      action='store_true'
   )
 
   parser.add_argument(
