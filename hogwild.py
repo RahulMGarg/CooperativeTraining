@@ -13,32 +13,30 @@ from cooptimization import placeholder_inputs, build_model, input_data, DEFAULT_
 
 FLAGS = None
 
-def main(_):
-  data_sets = input_data.read_data_sets(FLAGS.input_data_dir, FLAGS.fake_data, one_hot=True)
-  if FLAGS.ps_hosts == "":
-    with open('hogwild_ps_host.txt') as f:
-        ps_hosts = [f.readlines()[0].strip() + ':2222']
-  else:
-    ps_hosts = FLAGS.ps_hosts.split(",")
+LOG_LOCATION = DEFAULT_BASE_DIRECTORY + "/distributed_training/"
+DATA_DIR = DEFAULT_BASE_DIRECTORY + '/tensorflow/mnist/input_data'
+EXPERIMENT = "/hogwild/"
+BATCH_SIZE = 100
 
-  worker_hosts = FLAGS.worker_hosts.split(",")
+def run(worker_hosts, ps_hosts, job_name, task_index):
+  data_sets = input_data.read_data_sets(DATA_DIR, one_hot=True)
   # Create a cluster from the parameter server and worker hosts.
   cluster = tf.train.ClusterSpec({"ps": ps_hosts, "worker": worker_hosts})
 
   # Create and start a server for the local task.
   server = tf.train.Server(cluster,
-                           job_name=FLAGS.job_name,
-                           task_index=FLAGS.task_index)
+                           job_name=job_name,
+                           task_index=task_index)
 
-  if FLAGS.job_name == "ps":
+  if job_name == "ps":
     server.join()
-  elif FLAGS.job_name == "worker":
+  elif job_name == "worker":
     with tf.device(tf.train.replica_device_setter(
-        worker_device="/job:worker/task:%d" % FLAGS.task_index,
+        worker_device="/job:worker/task:%d" % task_index,
         cluster=cluster)):
       # Build model and set up local variables
-      images, labels = placeholder_inputs(name_scope='worker_%d' % FLAGS.task_index)
-      logits = build_model(images, name_scope='worker_%d' % FLAGS.task_index)
+      images, labels = placeholder_inputs(name_scope='worker_%d' % task_index)
+      logits = build_model(images, name_scope='worker_%d' % task_index)
       global_step = tf.contrib.framework.get_or_create_global_step()
 
       # build optimization procedure
@@ -55,17 +53,17 @@ def main(_):
       accuracy = tf.reduce_mean(tf.cast(correct_prediction, "float"))
       tf.summary.scalar('accuracy', accuracy)
 
-    is_chief = FLAGS.task_index == 0
+    is_chief = task_index == 0
     merged_summaries = tf.summary.merge_all()
     hooks=[tf.train.StopAtStepHook(last_step=1000000)]
 
     with tf.train.MonitoredTrainingSession(master=server.target,
                                            is_chief=is_chief,
-                                           checkpoint_dir=FLAGS.log_location + FLAGS.experiment + '/logs',
+                                           checkpoint_dir=LOG_LOCATION + EXPERIMENT + '/logs',
                                            hooks=hooks) as sess:
       print('Starting training')
       if is_chief:
-          train_writer = tf.summary.FileWriter(FLAGS.log_location + FLAGS.experiment,
+          train_writer = tf.summary.FileWriter(LOG_LOCATION + EXPERIMENT,
                                       sess.graph)
       while not sess.should_stop():
         # Run a training step asynchronously.
@@ -73,7 +71,7 @@ def main(_):
         # perform *synchronous* training.
         # sess.run handles AbortedError in case of preempted PS.
 
-        batch_x, batch_y = data_sets.train.next_batch(FLAGS.batch_size, FLAGS.fake_data)
+        batch_x, batch_y = data_sets.train.next_batch(BATCH_SIZE, False)
         feed_dict = {images: batch_x.reshape((-1,28,28,1)), labels: batch_y}
         _, cost, step, summary = sess.run([train_op, loss, global_step, merged_summaries], 
                                     feed_dict=feed_dict)
