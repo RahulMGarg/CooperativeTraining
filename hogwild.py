@@ -18,6 +18,7 @@ LOG_LOCATION = DEFAULT_BASE_DIRECTORY + "/distributed_training/"
 DATA_DIR = DEFAULT_BASE_DIRECTORY + '/tensorflow/mnist/input_data'
 EXPERIMENT = "/hogwild/"
 BATCH_SIZE = 100
+MAX_STEPS = 1000
 
 def run(worker_hosts, ps_hosts, job_name, task_index):
   data_sets = input_data.read_data_sets(DATA_DIR, one_hot=True)
@@ -63,13 +64,13 @@ def run(worker_hosts, ps_hosts, job_name, task_index):
         f.write('Built model\n')
 
     is_chief = task_index == 0
+    saver = tf.train.Saver(sharded=True)
     merged_summaries = tf.summary.merge_all()
     hooks=[tf.train.StopAtStepHook(last_step=1000000)]
 
-    with tf.train.MonitoredTrainingSession(master=server.target,
-                                           is_chief=is_chief,
-                                           checkpoint_dir=LOG_LOCATION + EXPERIMENT + '/logs',
-                                           hooks=hooks) as sess:
+    global_init = tf.global_variables_initializer()
+
+    with tf.Session(server.target) as sess:
       print('Starting training')
       with open(log_file, 'a') as f:
         f.write('Starting training\n')
@@ -77,6 +78,12 @@ def run(worker_hosts, ps_hosts, job_name, task_index):
       if is_chief:
           train_writer = tf.summary.FileWriter(LOG_LOCATION + EXPERIMENT,
                                       sess.graph)
+          sess.run(global_init)
+          with open('chief_ready.txt', 'w'):
+              f.write('OK')
+      else:
+          while not os.path.isfile('chief_ready.txt'):
+              time.sleep(5)
       while not sess.should_stop():
         # Run a training step asynchronously.
         # See `tf.train.SyncReplicasOptimizer` for additional details on how to
@@ -94,6 +101,12 @@ def run(worker_hosts, ps_hosts, job_name, task_index):
             f.write(log_message + '\n')
 
         print(log_message)
+        
+        if is_chief and step % 1000 == 0:
+            saver.save(sess, LOG_LOCATION + EXPERIMENT + '/logs')
+
+        if step >= MAX_STEPS:
+            break
 
 if __name__ == "__main__":
   parser = argparse.ArgumentParser()
