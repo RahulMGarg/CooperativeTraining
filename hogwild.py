@@ -13,6 +13,7 @@ from cooptimization import placeholder_inputs, build_model, input_data, DEFAULT_
 
 FLAGS = None
 
+DEFAULT_BASE_DIRECTORY = "/ubc/cs/project/arrow/jasonhar/CooperativeTraining"
 LOG_LOCATION = DEFAULT_BASE_DIRECTORY + "/distributed_training/"
 DATA_DIR = DEFAULT_BASE_DIRECTORY + '/tensorflow/mnist/input_data'
 EXPERIMENT = "/hogwild/"
@@ -23,14 +24,20 @@ def run(worker_hosts, ps_hosts, job_name, task_index):
   # Create a cluster from the parameter server and worker hosts.
   cluster = tf.train.ClusterSpec({"ps": ps_hosts, "worker": worker_hosts})
 
+  log_file = 'tmp_log_%s_%d.txt' % (job_name, task_index)
   # Create and start a server for the local task.
   server = tf.train.Server(cluster,
                            job_name=job_name,
                            task_index=task_index)
 
   if job_name == "ps":
+    with open(log_file, 'w') as f:
+        f.write('Starting PS\n')
     server.join()
   elif job_name == "worker":
+    with open(log_file, 'w') as f:
+        f.write('Starting worker\n')
+
     with tf.device(tf.train.replica_device_setter(
         worker_device="/job:worker/task:%d" % task_index,
         cluster=cluster)):
@@ -52,6 +59,8 @@ def run(worker_hosts, ps_hosts, job_name, task_index):
       correct_prediction = tf.equal(tf.argmax(logits, 1), tf.argmax(labels, 1))
       accuracy = tf.reduce_mean(tf.cast(correct_prediction, "float"))
       tf.summary.scalar('accuracy', accuracy)
+    with open(log_file, 'a') as f:
+        f.write('Built model\n')
 
     is_chief = task_index == 0
     merged_summaries = tf.summary.merge_all()
@@ -62,6 +71,9 @@ def run(worker_hosts, ps_hosts, job_name, task_index):
                                            checkpoint_dir=LOG_LOCATION + EXPERIMENT + '/logs',
                                            hooks=hooks) as sess:
       print('Starting training')
+      with open(log_file, 'a') as f:
+        f.write('Starting training\n')
+
       if is_chief:
           train_writer = tf.summary.FileWriter(LOG_LOCATION + EXPERIMENT,
                                       sess.graph)
@@ -77,8 +89,11 @@ def run(worker_hosts, ps_hosts, job_name, task_index):
                                     feed_dict=feed_dict)
         if is_chief:
             train_writer.add_summary(summary, global_step=step)
+        log_message = 'Step: %d, cost: %f' % (step, cost)
+        with open(log_file, 'a') as f:
+            f.write(log_message + '\n')
 
-        print('Step: %d, cost: %f' % (step, cost))
+        print(log_message)
 
 if __name__ == "__main__":
   parser = argparse.ArgumentParser()
