@@ -11,7 +11,6 @@ import tensorflow.contrib.slim as slim
 from tensorflow.examples.tutorials.mnist import input_data
 from tensorflow.examples.tutorials.mnist import mnist
 
-from coop_training_optimizer import CooperativeReplicasOptimizer
 
 FLAGS = None
 DEFAULT_BASE_DIRECTORY = '/tmp'

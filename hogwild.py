@@ -26,7 +26,8 @@ def _p(s, p):
         s = '%s_%s' % (p, s)
     return s
 
-def run(worker_hosts, ps_hosts, job_name, task_index, logname="tmp"):
+def run(worker_hosts, ps_hosts, job_name, task_index, logname="hogwild"):
+  EXPERIMENT = "/%s/" % logname
   settings = locals()
   data_sets = input_data.read_data_sets(DATA_DIR, one_hot=True)
   # Create a cluster from the parameter server and worker hosts.
@@ -74,7 +75,7 @@ def run(worker_hosts, ps_hosts, job_name, task_index, logname="tmp"):
     global_init = tf.global_variables_initializer()
     sv = tf.train.Supervisor(logdir=LOG_LOCATION + EXPERIMENT,
                     is_chief=is_chief, init_op=global_init,
-                    summary_op=None, checkpoint_basename='hogwild.ckpt')
+                    summary_op=None, checkpoint_basename='%s.ckpt' % logname)
 
     with sv.managed_session(server.target) as sess:
       print('Starting training')
