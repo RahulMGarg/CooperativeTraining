@@ -3,6 +3,7 @@ import argparse
 import time
 import hogwild
 import redis
+import traceback
 
 REDIS_HOST = 'cersei'
 
@@ -66,28 +67,30 @@ def main():
 
     observed_workers = 0
     r = redis.StrictRedis(host=REDIS_HOST, port=6379, db=0)
-    uid = int(r.rpush(job_name, host))
+    uid = int(r.rpush(job_name, host)) - 1
     while True:
-        n_workers = int(r.get('worker'))
-        n_ps = int(r.get('ps'))
+        n_workers = int(r.llen('worker'))
+        n_ps = int(r.llen('ps'))
         n = n_workers + n_ps
         if (n_workers == FLAGS.n_workers) and (n_ps == FLAGS.n_ps):
             break
         elif n > (FLAGS.n_workers + FLAGS.n_ps):
             raise ValueError('Too many connections, exiting...')
         else:
+            print('Found %d / %d workers and %d / %d parameter servers. Waiting...' % (n_workers, FLAGS.n_workers, n_ps, FLAGS.n_ps))
             time.sleep(0.5)
     
     workers = r.lrange('worker',0, -1)
     worker_hosts = ['%s:%d' % (hostname, i + 2223) for hostname, i in zip(workers, range(len(workers)))]
     ps = r.lrange('ps', 0, -1)
     ps_hosts = ['%s:%d' % (hostname, i + 2210) for hostname, i in zip(ps, range(len(workers)))]
+    print(worker_hosts, ps_hosts, job_name, uid)
     try:
         hogwild.run(worker_hosts, ps_hosts, job_name, uid)
         r.lrem(job_name, 1, host) # cleanup
-    except Exception as e:
-        with open('%s_%s.log' % (job_name, FLAGS.task_index), 'w') as f:
-            f.write('%s:%s\n' % (type(e), str(e)))
+    except Exception:
+        with open('%s_%s.errors' % (job_name, FLAGS.task_index), 'w') as f:
+            f.write(traceback.format_exc())
         r.lrem(job_name, 1, host) # cleanup
 
 
