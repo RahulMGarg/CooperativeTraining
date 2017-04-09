@@ -28,11 +28,11 @@ class OnlineUpdate(object):
                 W_p = tf.Variable(tf.ones_like(v), trainable=False, name='W_parameter')
                 W_g = tf.Variable(tf.zeros_like(v), trainable=False, name='W_grad')
                 bias = tf.Variable(tf.ones_like(v), trainable=False, name='bias')
-                p = tf.Variable(tf.zeros_like(v), trainable=False, name=v.name + '_prediction')
+                p = tf.Variable(tf.zeros_like(v), trainable=False, name='prediction')
                 self.prev_prediction.append(p)
                 self.locals.append((W_p, W_g, bias))
     
-    def get_predict_op():
+    def get_predict_op(self):
         predict_op = []
         for v, g, w, p in zip(self.variables, self.grads, self.locals, self.prev_prediction):
             prediction = v * w[0] + g * w[1] + w[2]
@@ -40,7 +40,7 @@ class OnlineUpdate(object):
             predict_op.append(tf.assign(p, prediction))
         return predict_op
     
-    def update_variables(true_values, lr = 0.001, update='sgd', eps = 1e-6):
+    def update_variables(self, true_values, lr = 0.001, update='sgd', eps = 1e-6):
         update_op = []
         if update == 'adagrad':
             h_list = []
@@ -63,7 +63,6 @@ class OnlineUpdate(object):
 
 
 def placeholder_inputs(batch_size=100, name_scope=None):
-    with tf.name_scope(name_scope, 'Data'):
         images_placeholder = tf.placeholder(tf.float32, shape=(batch_size,
                                                             28, 28, 1))
         labels_placeholder = tf.placeholder(tf.int32, shape=(batch_size, 10))
@@ -87,7 +86,7 @@ def flatten(var):
 def join_parameters(vars):
     out = flatten(vars[0])
     for i in xrange(1, len(vars)):
-        out = tf.concat(0, [out, flatten(vars[i])])
+        out = tf.concat([out, flatten(vars[i])], 0)
     return out
 
 def sqr_dist(x, y):
@@ -114,7 +113,7 @@ def get_batch():
     return batch_x, batch_y
 
 def main(_):
-  data_sets = input_data.load_mnist(FLAGS.input_data_dir)
+  data_sets = input_data.read_data_sets(FLAGS.input_data_dir, FLAGS.fake_data, one_hot=True)
   if FLAGS.ps_hosts == "":
     with open('cooptimization.txt') as f:
         ps_hosts = [f.readlines()[0].strip() + ':2222']
@@ -160,7 +159,9 @@ def main(_):
         predict_op = online_update.get_predict_op()
         update_op = online_update.update_variables(ps_variables)
       
-      lr_offset = weighting(join_parameters(local_variables), join_parameters(ps_variables), sig=(1./FLAGS.sharpness))
+      local_join = join_parameters(local_variables)
+      ps_join = join_parameters(ps_variables)
+      lr_offset = weighting(local_join, ps_join, sig=(1./FLAGS.sharpness))
 
       weighted_grads_and_vars = []
       for (g_loc, v_loc), v_ps in zip(grads_and_vars, ps_variables):
@@ -178,10 +179,11 @@ def main(_):
 
     with tf.Session(server.target) as sess:
       i = 0
+      sess.run(global_init)
       print('Starting training')
       if is_chief:
         # Copy the chief's initialization to the parameter server
-        sess.run(global_init)
+        #sess.run(global_init)
         sess.run(ps_init)
         train_writer = tf.summary.FileWriter(FLAGS.log_location + FLAGS.experiment,
                                       sess.graph)
