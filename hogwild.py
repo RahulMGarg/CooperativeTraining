@@ -2,6 +2,7 @@ from __future__ import print_function
 
 import argparse
 import sys
+import os
 import time
 
 import numpy as np
@@ -18,7 +19,7 @@ LOG_LOCATION = DEFAULT_BASE_DIRECTORY + "/distributed_training/"
 DATA_DIR = DEFAULT_BASE_DIRECTORY + '/tensorflow/mnist/input_data'
 EXPERIMENT = "/hogwild/"
 BATCH_SIZE = 100
-MAX_STEPS = 1000
+MAX_STEPS = 100000
 
 def run(worker_hosts, ps_hosts, job_name, task_index):
   data_sets = input_data.read_data_sets(DATA_DIR, one_hot=True)
@@ -76,15 +77,18 @@ def run(worker_hosts, ps_hosts, job_name, task_index):
         f.write('Starting training\n')
 
       if is_chief:
+
           train_writer = tf.summary.FileWriter(LOG_LOCATION + EXPERIMENT,
                                       sess.graph)
           sess.run(global_init)
-          with open('chief_ready.txt', 'w'):
+          with open('chief_ready.txt', 'w') as f:
               f.write('OK')
       else:
           while not os.path.isfile('chief_ready.txt'):
+              with open(log_file, 'a') as f:
+                f.write("Waiting for chief\n")
               time.sleep(5)
-      while not sess.should_stop():
+      while True:
         # Run a training step asynchronously.
         # See `tf.train.SyncReplicasOptimizer` for additional details on how to
         # perform *synchronous* training.
