@@ -32,6 +32,13 @@ def setup_parser():
     )
 
     parser.add_argument(
+        "--log_name",
+        type=str,
+        required=True,
+        help="Name to use for redis queue"
+    )
+
+    parser.add_argument(
         "--job_name",
         type=str,
         required=True,
@@ -52,6 +59,8 @@ def decode_list(redis_list):
 def main():
     parser = setup_parser()
     FLAGS, unparsed = parser.parse_known_args()
+    def job_id(job_name):
+        return '%s::%s' % (FLAGS.log_name, job_name)
     host = subprocess.check_output(["hostname"]).strip()
     job_name = FLAGS.job_name
     if not job_name in ['ps', 'worker']:
@@ -60,10 +69,10 @@ def main():
     observed_workers = 0
     r = redis.StrictRedis(host=REDIS_HOST, port=6379, db=0)
     unique_name = "('%s', %d)" % (host, FLAGS.task_index)
-    uid = int(r.rpush(job_name, unique_name)) - 1
+    uid = int(r.rpush(job_id(job_name), unique_name)) - 1
     while True:
-        n_workers = int(r.llen('worker'))
-        n_ps = int(r.llen('ps'))
+        n_workers = int(r.llen(job_id('worker')))
+        n_ps = int(r.llen(job_id('ps')))
         n = n_workers + n_ps
         if (n_workers == FLAGS.n_workers) and (n_ps == FLAGS.n_ps):
             break
@@ -73,18 +82,18 @@ def main():
             print('Found %d / %d workers and %d / %d parameter servers. Waiting...' % (n_workers, FLAGS.n_workers, n_ps, FLAGS.n_ps))
             time.sleep(0.5)
     
-    workers = decode_list(r.lrange('worker',0, -1))
+    workers = decode_list(r.lrange(job_id('worker'),0, -1))
     worker_hosts = ['%s:%d' % (hostname, i + 2223) for hostname, i in workers]
-    ps = decode_list(r.lrange('ps', 0, -1))
+    ps = decode_list(r.lrange(job_id('ps'), 0, -1))
     ps_hosts = ['%s:%d' % (hostname, i + 2210) for hostname, i in ps]
-    print(worker_hosts, ps_hosts, job_name, FLAGS.task_index)
+    print(worker_hosts, ps_hosts, job_id(job_name), FLAGS.task_index)
     try:
-        hogwild.run(worker_hosts, ps_hosts, job_name, FLAGS.task_index)
-        r.lrem(job_name, 1, unique_name) # cleanup
+        hogwild.run(worker_hosts, ps_hosts, job_name, FLAGS.task_index, FLAGS.log_name)
+        r.lrem(job_id(job_name), 1, unique_name) # cleanup
     except Exception:
-        with open('%s_%s.errors' % (job_name, FLAGS.task_index), 'w') as f:
+        with open('%s_%s.errors' % (job_id(job_name), FLAGS.task_index), 'w') as f:
             f.write(traceback.format_exc())
-        r.lrem(job_name, 1, unique_name) # cleanup
+        r.lrem(job_id(job_name), 1, unique_name) # cleanup
 
 
 
