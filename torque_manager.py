@@ -2,6 +2,9 @@ import subprocess
 import argparse
 import time
 import hogwild
+import redis
+
+REDIS_HOST = 'cersei'
 
 def setup_parser():
     parser = argparse.ArgumentParser()
@@ -33,6 +36,13 @@ def setup_parser():
         required=True,
         help="One of 'ps', 'worker'"
     )
+
+    parser.add_argument(
+        "--experiment_name",
+        type=str,
+        default='',
+        help="Unique name for the experiment"
+    )
     return parser 
 
 def parse_file(lines):
@@ -50,25 +60,35 @@ def main():
     parser = setup_parser()
     FLAGS, unparsed = parser.parse_known_args()
     host = subprocess.check_output(["hostname"]).strip()
+    job_name = FLAGS.job_name
+    if not job_name in ['ps', 'worker']:
+        raise ValueError("Job name must be one of 'ps' or 'worker'")
 
     observed_workers = 0
-    with open('active_workers.txt', 'a') as f:
-        f.write('%d,%s,%s\n' % (FLAGS.task_index, FLAGS.job_name, host))
-    
-    ps_ready = False
-    workers_ready = False
+    r = redis.StrictRedis(host=REDIS_HOST, port=6379, db=0)
+    uid = int(r.rpush(job_name, host))
     while True:
-        with open('active_workers.txt') as f:
-            lines = f.readlines()
-        ps_hosts, worker_hosts = parse_file(lines)
-        workers_ready = len(worker_hosts) == FLAGS.n_workers
-        ps_ready = len(ps_hosts) == FLAGS.n_ps
-        if workers_ready and ps_ready:
+        n_workers = int(r.get('worker'))
+        n_ps = int(r.get('ps'))
+        n = n_workers + n_ps
+        if (n_workers == FLAGS.n_workers) and (n_ps == FLAGS.n_ps):
             break
+        elif n > (FLAGS.n_workers + FLAGS.n_ps):
+            raise ValueError('Too many connections, exiting...')
         else:
             time.sleep(0.5)
-    hogwild.run(worker_hosts, ps_hosts, FLAGS.job_name, FLAGS.task_index)
-        
+    
+    workers = r.lrange('worker',0, -1)
+    worker_hosts = ['%s:%d' % (hostname, i + 2223) for hostname, i in zip(workers, range(len(workers)))]
+    ps = r.lrange('ps', 0, -1)
+    ps_hosts = ['%s:%d' % (hostname, i + 2210) for hostname, i in zip(ps, range(len(workers)))]
+    try:
+        hogwild.run(worker_hosts, ps_hosts, job_name, uid)
+        r.lrem(job_name, 1, host) # cleanup
+    except Exception as e:
+        with open('%s_%s.log' % (job_name, FLAGS.task_index), 'w') as f:
+            f.write('%s:%s\n' % (type(e), str(e)))
+        r.lrem(job_name, 1, host) # cleanup
 
 
 
