@@ -67,30 +67,31 @@ def run(worker_hosts, ps_hosts, job_name, task_index):
     is_chief = task_index == 0
     saver = tf.train.Saver(sharded=True)
     merged_summaries = tf.summary.merge_all()
-    hooks=[tf.train.StopAtStepHook(last_step=1000000)]
 
     global_init = tf.global_variables_initializer()
+    sv = tf.train.Supervisor(logdir=LOG_LOCATION + EXPERIMENT,
+                    is_chief=is_chief, init_op=global_init)
 
-    with tf.Session(server.target) as sess:
+    with sv.managed_session(server.target) as sess:
       print('Starting training')
       with open(log_file, 'a') as f:
         f.write('Starting training\n')
 
-      if is_chief:
-          with open(log_file, 'a') as f:
-              f.write('CHIEF BLOCK 1\n')
-          train_writer = tf.summary.FileWriter(LOG_LOCATION + EXPERIMENT,
-                                      sess.graph)
-          with open(log_file, 'a') as f:
-              f.write('CHIEF BLOCK 2\n')
-          sess.run(global_init)
-          with open('chief_ready.txt', 'w') as f:
-              f.write('OK')
-      else:
-          while not os.path.isfile('chief_ready.txt'):
-              with open(log_file, 'a') as f:
-                f.write("Waiting for chief\n")
-              time.sleep(5)
+    #   if is_chief:
+    #       with open(log_file, 'a') as f:
+    #           f.write('CHIEF BLOCK 1\n')
+    #       train_writer = tf.summary.FileWriter(LOG_LOCATION + EXPERIMENT,
+    #                                   sess.graph)
+    #       with open(log_file, 'a') as f:
+    #           f.write('CHIEF BLOCK 2\n')
+    #       sess.run(global_init)
+    #       with open('chief_ready.txt', 'w') as f:
+    #           f.write('OK')
+    #   else:
+    #       while not os.path.isfile('chief_ready.txt'):
+    #           with open(log_file, 'a') as f:
+    #             f.write("Waiting for chief\n")
+    #           time.sleep(5)
       while True:
         # Run a training step asynchronously.
         # See `tf.train.SyncReplicasOptimizer` for additional details on how to
