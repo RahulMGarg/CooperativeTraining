@@ -46,16 +46,8 @@ def setup_parser():
     )
     return parser 
 
-def parse_file(lines):
-    ps_hosts = []
-    worker_hosts = []
-    for l in lines:
-        task_id, job, host_name = l.strip().split(',')
-        if job == 'worker':
-            worker_hosts.append('%s:%d' % (host_name, int(task_id) + 2223))
-        if job == 'ps':
-            ps_hosts.append('%s:%d' % (host_name, int(task_id) + 2222))
-    return ps_hosts, worker_hosts
+def decode_list(redis_list):
+    return [eval(i) for i in redis_list]
 
 def main():
     parser = setup_parser()
@@ -64,10 +56,11 @@ def main():
     job_name = FLAGS.job_name
     if not job_name in ['ps', 'worker']:
         raise ValueError("Job name must be one of 'ps' or 'worker'")
-
+    
     observed_workers = 0
     r = redis.StrictRedis(host=REDIS_HOST, port=6379, db=0)
-    uid = int(r.rpush(job_name, host)) - 1
+    unique_name = "('%s', %d)" % (host, FLAGS.task_index)
+    uid = int(r.rpush(job_name, unique_name)) - 1
     while True:
         n_workers = int(r.llen('worker'))
         n_ps = int(r.llen('ps'))
@@ -80,18 +73,18 @@ def main():
             print('Found %d / %d workers and %d / %d parameter servers. Waiting...' % (n_workers, FLAGS.n_workers, n_ps, FLAGS.n_ps))
             time.sleep(0.5)
     
-    workers = r.lrange('worker',0, -1)
-    worker_hosts = ['%s:%d' % (hostname, i + 2223) for hostname, i in zip(workers, range(len(workers)))]
-    ps = r.lrange('ps', 0, -1)
-    ps_hosts = ['%s:%d' % (hostname, i + 2210) for hostname, i in zip(ps, range(len(workers)))]
-    print(worker_hosts, ps_hosts, job_name, uid)
+    workers = decode_list(r.lrange('worker',0, -1))
+    worker_hosts = ['%s:%d' % (hostname, i + 2223) for hostname, i in workers]
+    ps = decode_list(r.lrange('ps', 0, -1))
+    ps_hosts = ['%s:%d' % (hostname, i + 2210) for hostname, i in ps]
+    print(worker_hosts, ps_hosts, job_name, FLAGS.task_index)
     try:
-        hogwild.run(worker_hosts, ps_hosts, job_name, uid)
-        r.lrem(job_name, 1, host) # cleanup
+        hogwild.run(worker_hosts, ps_hosts, job_name, FLAGS.task_index)
+        r.lrem(job_name, 1, unique_name) # cleanup
     except Exception:
         with open('%s_%s.errors' % (job_name, FLAGS.task_index), 'w') as f:
             f.write(traceback.format_exc())
-        r.lrem(job_name, 1, host) # cleanup
+        r.lrem(job_name, 1, unique_name) # cleanup
 
 
 
