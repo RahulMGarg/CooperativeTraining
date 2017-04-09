@@ -21,12 +21,18 @@ EXPERIMENT = "/hogwild/"
 BATCH_SIZE = 100
 MAX_STEPS = 100000
 
-def run(worker_hosts, ps_hosts, job_name, task_index):
+def _p(s, p):
+    if len(p) > 0:
+        s = '%s_%s' % (p, s)
+    return s
+
+def run(worker_hosts, ps_hosts, job_name, task_index, logname="tmp"):
+  settings = locals()
   data_sets = input_data.read_data_sets(DATA_DIR, one_hot=True)
   # Create a cluster from the parameter server and worker hosts.
   cluster = tf.train.ClusterSpec({"ps": ps_hosts, "worker": worker_hosts})
 
-  log_file = 'tmp_log_%s_%d.txt' % (job_name, task_index)
+  log_file = _p('%s_%d.txt' % (job_name, task_index), logname)
   # Create and start a server for the local task.
   server = tf.train.Server(cluster,
                            job_name=job_name,
@@ -34,11 +40,11 @@ def run(worker_hosts, ps_hosts, job_name, task_index):
 
   if job_name == "ps":
     with open(log_file, 'w') as f:
-        f.write('Starting PS\n')
+        f.write('Starting PS with settings: %s\n' % str(settings))
     server.join()
   elif job_name == "worker":
     with open(log_file, 'w') as f:
-        f.write('Starting worker\n')
+        f.write('Starting worker with settings: %s\n' % str(settings))
 
     with tf.device(tf.train.replica_device_setter(
         worker_device="/job:worker/task:%d" % task_index,
@@ -54,65 +60,38 @@ def run(worker_hosts, ps_hosts, job_name, task_index):
 
       tf.summary.scalar('loss', loss)
 
-      opt = tf.train.AdagradOptimizer(0.01)
+      opt = tf.train.AdamOptimizer(0.01)
 
       train_op = opt.minimize(loss, global_step=global_step)
 
       correct_prediction = tf.equal(tf.argmax(logits, 1), tf.argmax(labels, 1))
       accuracy = tf.reduce_mean(tf.cast(correct_prediction, "float"))
       tf.summary.scalar('accuracy', accuracy)
-    with open(log_file, 'a') as f:
-        f.write('Built model\n')
 
     is_chief = task_index == 0
-    saver = tf.train.Saver(sharded=True)
     merged_summaries = tf.summary.merge_all()
 
     global_init = tf.global_variables_initializer()
     sv = tf.train.Supervisor(logdir=LOG_LOCATION + EXPERIMENT,
-                    is_chief=is_chief, init_op=global_init)
+                    is_chief=is_chief, init_op=global_init,
+                    summary_op=None, checkpoint_basename='hogwild.ckpt')
 
     with sv.managed_session(server.target) as sess:
       print('Starting training')
       with open(log_file, 'a') as f:
         f.write('Starting training\n')
-
-    #   if is_chief:
-    #       with open(log_file, 'a') as f:
-    #           f.write('CHIEF BLOCK 1\n')
-    #       train_writer = tf.summary.FileWriter(LOG_LOCATION + EXPERIMENT,
-    #                                   sess.graph)
-    #       with open(log_file, 'a') as f:
-    #           f.write('CHIEF BLOCK 2\n')
-    #       sess.run(global_init)
-    #       with open('chief_ready.txt', 'w') as f:
-    #           f.write('OK')
-    #   else:
-    #       while not os.path.isfile('chief_ready.txt'):
-    #           with open(log_file, 'a') as f:
-    #             f.write("Waiting for chief\n")
-    #           time.sleep(5)
-      while True:
-        # Run a training step asynchronously.
-        # See `tf.train.SyncReplicasOptimizer` for additional details on how to
-        # perform *synchronous* training.
-        # sess.run handles AbortedError in case of preempted PS.
-
+      while not sv.should_stop():
         batch_x, batch_y = data_sets.train.next_batch(BATCH_SIZE, False)
         feed_dict = {images: batch_x.reshape((-1,28,28,1)), labels: batch_y}
-        _, cost, step, summary = sess.run([train_op, loss, global_step, merged_summaries], 
-                                    feed_dict=feed_dict)
-        if is_chief:
-            train_writer.add_summary(summary, global_step=step)
+        _, cost, step = sess.run([train_op, loss, global_step], feed_dict=feed_dict)
+        if is_chief and step % 100 == 0:
+            sv.summary_computed(sess, sess.run(merged_summaries, feed_dict=feed_dict))
+        
         log_message = 'Step: %d, cost: %f' % (step, cost)
         with open(log_file, 'a') as f:
             f.write(log_message + '\n')
 
         print(log_message)
-        
-        if is_chief and step % 1000 == 0:
-            saver.save(sess, LOG_LOCATION + EXPERIMENT + '/logs')
-
         if step >= MAX_STEPS:
             break
 
@@ -198,4 +177,8 @@ if __name__ == "__main__":
 
 
   FLAGS, unparsed = parser.parse_known_args()
-  tf.app.run(main=main, argv=[sys.argv[0]] + unparsed)
+  DEFAULT_BASE_DIRECTORY = './'
+  LOG_LOCATION = "./distributed_training/"
+  DATA_DIR = './mnist/input_data'
+  run(FLAGS.worker_hosts.split(','), FLAGS.ps_hosts.split(','), FLAGS.job_name, FLAGS.task_index, "LOCAL")
+  #tf.app.run(main=main, argv=[sys.argv[0]] + unparsed)
