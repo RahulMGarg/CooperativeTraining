@@ -77,9 +77,12 @@ def run(worker_hosts, ps_hosts, job_name, task_index):
         f.write('Starting training\n')
 
       if is_chief:
-
+          with open(log_file, 'a') as f:
+              f.write('CHIEF BLOCK 1\n')
           train_writer = tf.summary.FileWriter(LOG_LOCATION + EXPERIMENT,
                                       sess.graph)
+          with open(log_file, 'a') as f:
+              f.write('CHIEF BLOCK 2\n')
           sess.run(global_init)
           with open('chief_ready.txt', 'w') as f:
               f.write('OK')
