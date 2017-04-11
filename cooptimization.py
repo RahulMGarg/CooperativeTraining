@@ -11,7 +11,6 @@ import tensorflow.contrib.slim as slim
 from tensorflow.examples.tutorials.mnist import input_data
 from tensorflow.examples.tutorials.mnist import mnist
 
-
 FLAGS = None
 DEFAULT_BASE_DIRECTORY = '/tmp'
 
@@ -79,6 +78,14 @@ def build_model(images, num_classes=10, name_scope=None):
             net = slim.fully_connected(net, num_classes, activation_fn=None)       
             return net
 
+def select_optimizer(opt):
+    if opt == 'adam':
+        return tf.train.AdamOptimizer(0.01)
+    elif opt == 'sgd':
+        return tf.train.GradientDescentOptimizer(0.01)
+    else:
+        raise ValueError('Unrecognised optimizer %s' % opt)
+
 def flatten(var):
     return tf.reshape(var, [-1])
 
@@ -111,29 +118,44 @@ def copy_variables(refs, values):
 def get_batch():
     return batch_x, batch_y
 
-def main(_):
-  data_sets = input_data.read_data_sets(FLAGS.input_data_dir, FLAGS.fake_data, one_hot=True)
-  if FLAGS.ps_hosts == "":
-    with open('cooptimization.txt') as f:
-        ps_hosts = [f.readlines()[0].strip() + ':2222']
-  else:
-    ps_hosts = FLAGS.ps_hosts.split(",")
-  worker_hosts = FLAGS.worker_hosts.split(",")
+def _p(s, p):
+    if len(p) > 0:
+        s = '%s_%s' % (p, s)
+    return s
+
+DEFAULT_BASE_DIRECTORY = "/ubc/cs/project/arrow/jasonhar/CooperativeTraining"
+LOG_LOCATION = DEFAULT_BASE_DIRECTORY + "/distributed_training/"
+DATA_DIR = DEFAULT_BASE_DIRECTORY + '/tensorflow/mnist/input_data'
+EXPERIMENT = "/hogwild/"
+BATCH_SIZE = 100
+MAX_STEPS = 1000000
+
+def run(worker_hosts, ps_hosts, job_name, task_index,
+        logname="cooptimzation", opt="sgd", predict_future=False, sharpness=2.):
+  EXPERIMENT = "/%s/" % logname
+  settings = locals()
+  data_sets = input_data.read_data_sets(DATA_DIR, one_hot=True)
+
   # Create a cluster from the parameter server and worker hosts.
   cluster = tf.train.ClusterSpec({"ps": ps_hosts, "worker": worker_hosts})
 
+  log_file = _p('%s_%d.txt' % (job_name, task_index), logname)
   # Create and start a server for the local task.
   server = tf.train.Server(cluster,
-                           job_name=FLAGS.job_name,
-                           task_index=FLAGS.task_index)
+                           job_name=job_name,
+                           task_index=task_index)
 
-  if FLAGS.job_name == "ps":
+  if job_name == "ps":
+    with open(log_file, 'w') as f:
+        f.write('Starting PS with settings: %s\n' % str(settings))
     server.join()
-  elif FLAGS.job_name == "worker":
-    with tf.device("/job:worker/task:%d" % FLAGS.task_index):
-      # Build model and set up local variables
-      images, labels = placeholder_inputs(name_scope='worker_%d' % FLAGS.task_index)
-      logits = build_model(images, name_scope='worker_%d' % FLAGS.task_index)
+  elif job_name == "worker":
+    with open(log_file, 'w') as f:
+        f.write('Starting worker with settings: %s\n' % str(settings))
+    with tf.device("/job:worker/task:%d" % task_index):
+      # Build model and set up local variables on the worker nodes
+      images, labels = placeholder_inputs(name_scope='worker_%d' % task_index)
+      logits = build_model(images, name_scope='worker_%d' % task_index)
       local_variables = tf.trainable_variables()
 
     with tf.device("/job:ps/task:0"):
@@ -141,15 +163,15 @@ def main(_):
     
     # set up parameter server variables
     ps_variables, ps_init = replicate_vars_on_ps(local_variables, "/job:ps/task:0")
-    predict_future = FLAGS.predict_future
-    with tf.device("/job:worker/task:%d" % FLAGS.task_index):
+
+    with tf.device("/job:worker/task:%d" % task_index):
       # build optimization procedure
       slim.losses.softmax_cross_entropy(logits, labels)
       loss = slim.losses.get_total_loss()
 
       tf.summary.scalar('loss', loss)
 
-      opt = tf.train.AdagradOptimizer(0.01)
+      opt = select_optimizer(opt)
 
       get_ps_state = copy_variables(local_variables, ps_variables)
       grads_and_vars = opt.compute_gradients(loss, local_variables)
@@ -160,7 +182,7 @@ def main(_):
       
       local_join = join_parameters(local_variables)
       ps_join = join_parameters(ps_variables)
-      lr_offset = weighting(local_join, ps_join, sig=(1./FLAGS.sharpness))
+      lr_offset = weighting(local_join, ps_join, sig=(1./sharpness))
 
       weighted_grads_and_vars = []
       for (g_loc, v_loc), v_ps in zip(grads_and_vars, ps_variables):
@@ -172,34 +194,31 @@ def main(_):
       tf.summary.scalar('accuracy', accuracy)
 
     saver = tf.train.Saver(sharded=True)
-    is_chief = FLAGS.task_index == 0
+    is_chief = task_index == 0
     merged_summaries = tf.summary.merge_all()
     global_init = tf.global_variables_initializer()
 
     with tf.Session(server.target) as sess:
       i = 0
       sess.run(global_init)
+      sess.run(ps_init)
       print('Starting training')
       if is_chief:
         # Copy the chief's initialization to the parameter server
         #sess.run(global_init)
         sess.run(ps_init)
-        train_writer = tf.summary.FileWriter(FLAGS.log_location + FLAGS.experiment,
+        train_writer = tf.summary.FileWriter(LOG_LOCATION + EXPERIMENT,
                                       sess.graph)
 
       while True:
-        # Run a training step asynchronously.
-        # See `tf.train.SyncReplicasOptimizer` for additional details on how to
-        # perform *synchronous* training.
-        # sess.run handles AbortedError in case of preempted PS.
         sess.run(get_ps_state)
 
-        if FLAGS.slow:
-            pause = np.random.rand() * 2
-            print("Sleeping for %f seconds." % pause, end=' ')
-            time.sleep(pause)
+        #if FLAGS.slow:
+        #    pause = np.random.rand() * 2
+        #    print("Sleeping for %f seconds." % pause, end=' ')
+        #    time.sleep(pause)
 
-        batch_x, batch_y = data_sets.train.next_batch(FLAGS.batch_size, FLAGS.fake_data)
+        batch_x, batch_y = data_sets.train.next_batch(BATCH_SIZE, False)
         feed_dict = {images: batch_x.reshape((-1,28,28,1)), labels: batch_y}
         if predict_future:
             _ = sess.run(predict_op, feed_dict=feed_dict)
@@ -216,9 +235,9 @@ def main(_):
 
         print('Step: %d, cost: %f, lr_weight: %f' % (step, cost, lr_weight))
         if is_chief and step % 1000 == 0:
-            saver.save(sess, FLAGS.log_location + FLAGS.experiment + '/logs')
+            saver.save(sess, LOG_LOCATION + EXPERIMENT + '/logs')
 
-        if step == FLAGS.max_steps:
+        if step >= MAX_STEPS:
             break
 
 if __name__ == "__main__":
@@ -316,4 +335,7 @@ if __name__ == "__main__":
   )
 
   FLAGS, unparsed = parser.parse_known_args()
-  tf.app.run(main=main, argv=[sys.argv[0]] + unparsed)
+  DEFAULT_BASE_DIRECTORY = './'
+  LOG_LOCATION = "./distributed_training/"
+  DATA_DIR = './mnist/input_data'
+  run(FLAGS.worker_hosts.split(','), FLAGS.ps_hosts.split(','), FLAGS.job_name, FLAGS.task_index, "LOCAL", predict_future=FLAGS.predict_future)
