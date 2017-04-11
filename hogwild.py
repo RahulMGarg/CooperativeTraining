@@ -19,14 +19,14 @@ LOG_LOCATION = DEFAULT_BASE_DIRECTORY + "/distributed_training/"
 DATA_DIR = DEFAULT_BASE_DIRECTORY + '/tensorflow/mnist/input_data'
 EXPERIMENT = "/hogwild/"
 BATCH_SIZE = 100
-MAX_STEPS = 100000
+MAX_STEPS = 1000000
 
 def _p(s, p):
     if len(p) > 0:
         s = '%s_%s' % (p, s)
     return s
 
-def run(worker_hosts, ps_hosts, job_name, task_index, logname="hogwild"):
+def run(worker_hosts, ps_hosts, job_name, task_index, logname="hogwild", opt="sgd"):
   EXPERIMENT = "/%s/" % logname
   settings = locals()
   data_sets = input_data.read_data_sets(DATA_DIR, one_hot=True)
@@ -61,7 +61,12 @@ def run(worker_hosts, ps_hosts, job_name, task_index, logname="hogwild"):
 
       tf.summary.scalar('loss', loss)
 
-      opt = tf.train.AdamOptimizer(0.01)
+      if opt == 'adam':
+          opt = tf.train.AdamOptimizer(0.01)
+      elif opt == 'sgd':
+          opt = tf.train.GradientDescentOptimizer(0.01)
+      else:
+          raise ValueError('Unrecognised optimizer %s' % opt)
 
       train_op = opt.minimize(loss, global_step=global_step)
 
@@ -119,6 +124,13 @@ if __name__ == "__main__":
       type=str,
       default="/hogwild/",
       help="Experiment name"
+  )
+
+  parser.add_argument(
+      "--opt",
+      type=str,
+      default="sgd",
+      help="Optimizer"
   )
 
   parser.add_argument(
