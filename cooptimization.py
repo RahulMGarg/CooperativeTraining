@@ -23,13 +23,23 @@ class OnlineUpdate(object):
             self.locals = []
             self.prev_prediction = []
             for v in self.variables:
-                W_p = tf.Variable(tf.ones_like(v), trainable=False, name='W_parameter')
-                W_g = tf.Variable(tf.zeros_like(v), trainable=False, name='W_grad')
-                bias = tf.Variable(tf.ones_like(v), trainable=False, name='bias')
-                p = tf.Variable(tf.zeros_like(v), trainable=False, name='prediction')
+                W_p = tf.Variable(tf.ones_like(v.initialized_value()), trainable=False, name='W_parameter')
+                W_g = tf.Variable(tf.zeros_like(v.initialized_value()), trainable=False, name='W_grad')
+                bias = tf.Variable(tf.zeros_like(v.initialized_value()), trainable=False, name='bias')
+                p = tf.Variable(tf.zeros_like(v.initialized_value()), trainable=False, name='prediction')
                 self.prev_prediction.append(p)
                 self.locals.append((W_p, W_g, bias))
     
+    def get_locals(self):
+        '''
+        Get all local variables that need to be initialized
+        '''
+        local_vars = self.prev_prediction
+        for pars in self.locals:
+            for v in pars:
+                local_vars.append(v)
+        return local_vars
+
     def get_predict_op(self):
         predict_op = []
         for v, g, w, p in zip(self.variables, self.grads, self.locals, self.prev_prediction):
@@ -38,7 +48,7 @@ class OnlineUpdate(object):
             predict_op.append(tf.assign(p, prediction))
         return predict_op
     
-    def update_variables(self, true_values, lr = 0.001, update='sgd', eps = 1e-6):
+    def update_variables(self, true_values, lr = 0.0, update='sgd', eps = 1e-6):
         update_op = []
         if update == 'adagrad':
             h_list = []
@@ -131,7 +141,7 @@ BATCH_SIZE = 100
 MAX_STEPS = 1000000
 
 def run(worker_hosts, ps_hosts, job_name, task_index,
-        logname="cooptimzation", opt="sgd", predict_future=False, sharpness=2.):
+        logname="cooptimzation", opt="adam", predict_future=False, sharpness=2.):
   EXPERIMENT = "/%s/" % logname
   settings = locals()
   data_sets = input_data.read_data_sets(DATA_DIR, one_hot=True)
@@ -175,10 +185,13 @@ def run(worker_hosts, ps_hosts, job_name, task_index,
 
       get_ps_state = copy_variables(local_variables, ps_variables)
       grads_and_vars = opt.compute_gradients(loss, local_variables)
+      additional_variables = [] # placeholder to manage inits - only used if we use the prediction operation
       if predict_future:
+        print('Building prediction operation')
         online_update = OnlineUpdate(grads_and_vars)
         predict_op = online_update.get_predict_op()
         update_op = online_update.update_variables(ps_variables)
+        additional_variables = online_update.get_locals()
       
       local_join = join_parameters(local_variables)
       ps_join = join_parameters(ps_variables)
@@ -193,49 +206,45 @@ def run(worker_hosts, ps_hosts, job_name, task_index,
       accuracy = tf.reduce_mean(tf.cast(correct_prediction, "float"))
       tf.summary.scalar('accuracy', accuracy)
 
-    saver = tf.train.Saver(sharded=True)
     is_chief = task_index == 0
     merged_summaries = tf.summary.merge_all()
-    global_init = tf.global_variables_initializer()
 
-    with tf.Session(server.target) as sess:
-      i = 0
-      sess.run(global_init)
-      sess.run(ps_init)
+    #other = tf.global_variables()
+    #print(other)
+    local_init = tf.variables_initializer(local_variables + additional_variables)
+
+    sv = tf.train.Supervisor(logdir=LOG_LOCATION + EXPERIMENT,
+                    is_chief=is_chief,
+                    summary_op=None,
+                    saver=None, # remove this
+                    checkpoint_basename='%s.ckpt' % logname,
+                    local_init_op=local_init)
+
+    with sv.managed_session(server.target) as sess:
       print('Starting training')
-      if is_chief:
-        # Copy the chief's initialization to the parameter server
-        #sess.run(global_init)
-        sess.run(ps_init)
-        train_writer = tf.summary.FileWriter(LOG_LOCATION + EXPERIMENT,
-                                      sess.graph)
-
-      while True:
-        sess.run(get_ps_state)
-
-        #if FLAGS.slow:
-        #    pause = np.random.rand() * 2
-        #    print("Sleeping for %f seconds." % pause, end=' ')
-        #    time.sleep(pause)
-
+      with open(log_file, 'a') as f:
+        f.write('Starting training\n')
+      while not sv.should_stop():
         batch_x, batch_y = data_sets.train.next_batch(BATCH_SIZE, False)
         feed_dict = {images: batch_x.reshape((-1,28,28,1)), labels: batch_y}
+        sess.run(get_ps_state)
         if predict_future:
             _ = sess.run(predict_op, feed_dict=feed_dict)
 
         if predict_future:
-            _, cost, step, summary, lr_weight, _ = sess.run([train_op, loss, global_step, merged_summaries, lr_offset, update_op], 
+            _, cost, step, lr_weight, _ = sess.run([train_op, loss, global_step, lr_offset, update_op], 
                                         feed_dict=feed_dict)
         else:
-            _, cost, step, summary, lr_weight = sess.run([train_op, loss, global_step, merged_summaries, lr_offset], 
+            _, cost, step, lr_weight = sess.run([train_op, loss, global_step, lr_offset], 
                                         feed_dict=feed_dict)
 
         if is_chief:
-            train_writer.add_summary(summary, global_step=step)
+            sv.summary_computed(sess, sess.run(merged_summaries, feed_dict=feed_dict))
 
-        print('Step: %d, cost: %f, lr_weight: %f' % (step, cost, lr_weight))
-        if is_chief and step % 1000 == 0:
-            saver.save(sess, LOG_LOCATION + EXPERIMENT + '/logs')
+        log_message = 'Step: %d, cost: %f, lr_weight: %f' % (step, cost, lr_weight)
+        print(log_message)
+        with open(log_file, 'a') as f:
+            f.write(log_message + '\n')
 
         if step >= MAX_STEPS:
             break
