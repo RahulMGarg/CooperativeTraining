@@ -48,7 +48,7 @@ class OnlineUpdate(object):
             predict_op.append(tf.assign(p, prediction))
         return predict_op
     
-    def update_variables(self, true_values, lr = 0.0, update='sgd', eps = 1e-6):
+    def update_variables(self, true_values, lr = 0.0001, update='sgd', eps = 1e-6):
         update_op = []
         if update == 'adagrad':
             h_list = []
@@ -221,6 +221,8 @@ def run(worker_hosts, ps_hosts, job_name, task_index,
                     local_init_op=local_init)
 
     with sv.managed_session(server.target) as sess:
+      if is_chief:
+        sess.run(ps_init)
       print('Starting training')
       with open(log_file, 'a') as f:
         f.write('Starting training\n')
