@@ -1,3 +1,7 @@
+*.errors
 *.txt
+tensorflow/
+*.rdb
+*.log
+*.pbs
 *.pyc
-
