@@ -133,9 +133,9 @@ def _p(s, p):
         s = '%s_%s' % (p, s)
     return s
 
-DEFAULT_BASE_DIRECTORY = "/ubc/cs/project/arrow/jasonhar/CooperativeTraining"
+DEFAULT_BASE_DIRECTORY = "."
 LOG_LOCATION = DEFAULT_BASE_DIRECTORY + "/distributed_training/"
-DATA_DIR = DEFAULT_BASE_DIRECTORY + '/tensorflow/mnist/input_data'
+DATA_DIR = DEFAULT_BASE_DIRECTORY + "/tensorflow/mnist/input_data"
 EXPERIMENT = "/hogwild/"
 BATCH_SIZE = 100
 MAX_STEPS = 1000000
@@ -183,8 +183,9 @@ def run(worker_hosts, ps_hosts, job_name, task_index,
 
       opt = select_optimizer(opt)
 
-      get_ps_state = copy_variables(local_variables, ps_variables)
+      get_ps_state_op = copy_variables(local_variables, ps_variables)
       grads_and_vars = opt.compute_gradients(loss, local_variables)
+      #optimizter_variables = []
       additional_variables = [] # placeholder to manage inits - only used if we use the prediction operation
       if predict_future:
         print('Building prediction operation')
@@ -201,6 +202,8 @@ def run(worker_hosts, ps_hosts, job_name, task_index,
       for (g_loc, v_loc), v_ps in zip(grads_and_vars, ps_variables):
         weighted_grads_and_vars.append((g_loc * lr_offset, v_ps))
       train_op = opt.apply_gradients(weighted_grads_and_vars, global_step)
+      optimizer_variables = [opt.get_slot(v, n) for n in opt.get_slot_names() for _, v in weighted_grads_and_vars]
+      optimizer_variables += list(opt._get_beta_accumulators()) #TODO: get rid of this
 
       correct_prediction = tf.equal(tf.argmax(logits, 1), tf.argmax(labels, 1))
       accuracy = tf.reduce_mean(tf.cast(correct_prediction, "float"))
@@ -212,24 +215,41 @@ def run(worker_hosts, ps_hosts, job_name, task_index,
     #other = tf.global_variables()
     #print(other)
     local_init = tf.variables_initializer(local_variables + additional_variables)
+    optimizer_init = tf.variables_initializer(optimizer_variables + [global_step])
 
-    sv = tf.train.Supervisor(logdir=LOG_LOCATION + EXPERIMENT,
-                    is_chief=is_chief,
-                    summary_op=None,
-                    saver=None, # remove this
-                    checkpoint_basename='%s.ckpt' % logname,
-                    local_init_op=local_init)
+    #sv = tf.train.Supervisor(logdir=LOG_LOCATION + EXPERIMENT,
+    #                is_chief=is_chief,
+    #                summary_op=None,
+    #                saver=None, # remove this
+    #                checkpoint_basename='%s.ckpt' % logname,
+    #                local_init_op=local_init)
 
-    with sv.managed_session(server.target) as sess:
+    #with sv.managed_session(server.target) as sess:
+    with tf.Session(server.target) as sess:
+      sess.run(local_init)
       if is_chief:
         sess.run(ps_init)
+        sess.run(optimizer_init)
+        uninitialized = sess.run(tf.report_uninitialized_variables(tf.global_variables()))
+        train_writer = tf.summary.FileWriter(LOG_LOCATION + EXPERIMENT,
+                                      sess.graph)
+        print(uninitialized)
+      else:
+        #sess.run(local_init)
+        uninitialized = sess.run(tf.report_uninitialized_variables(tf.global_variables()))
+        while (len(uninitialized) > 0):
+            with open(log_file, 'a') as f:
+                f.write('Waiting for initialization\n')
+                time.sleep(5)
+
       print('Starting training')
       with open(log_file, 'a') as f:
         f.write('Starting training\n')
-      while not sv.should_stop():
+      #while not sv.should_stop():
+      while True:
         batch_x, batch_y = data_sets.train.next_batch(BATCH_SIZE, False)
         feed_dict = {images: batch_x.reshape((-1,28,28,1)), labels: batch_y}
-        sess.run(get_ps_state)
+        sess.run(get_ps_state_op)
         if predict_future:
             _ = sess.run(predict_op, feed_dict=feed_dict)
 
@@ -241,7 +261,9 @@ def run(worker_hosts, ps_hosts, job_name, task_index,
                                         feed_dict=feed_dict)
 
         if is_chief:
-            sv.summary_computed(sess, sess.run(merged_summaries, feed_dict=feed_dict))
+            summary = sess.run(merged_summaries, feed_dict=feed_dict)
+            train_writer.add_summary(summary, global_step=step)
+        #    sv.summary_computed(sess, sess.run(merged_summaries, feed_dict=feed_dict))
 
         log_message = 'Step: %d, cost: %f, lr_weight: %f' % (step, cost, lr_weight)
         print(log_message)
