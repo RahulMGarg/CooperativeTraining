@@ -1,9 +1,12 @@
 import subprocess
 import argparse
 import time
-import hogwild
-import redis
 import traceback
+
+import redis
+
+import hogwild
+import cooptimization
 
 REDIS_HOST = 'cersei'
 
@@ -52,6 +55,26 @@ def setup_parser():
         help="Optimizer: sgd or adam currently"
     )
 
+    parser.add_argument(
+        "--sync",
+        type=str,
+        default="hogwild",
+        help="Syncronization method - defaults to hogwild (i.e. no syncronization)"
+    )
+
+    parser.add_argument(
+        "--sharpness",
+        type=float,
+        default=2.,
+        help="The sharpness parameter for the soft gating function used in the cooptimization method"
+    )
+
+    parser.add_argument(
+        "--predict_future",
+        default=False,
+        action="store_true",
+        help="Flag to turning on prediction of future state for the cooptimization method"
+    )
 
     parser.add_argument(
         "--experiment_name",
@@ -64,6 +87,16 @@ def setup_parser():
 def decode_list(redis_list):
     return [eval(i) for i in redis_list]
 
+def get_runner(sync_method, FLAGS):
+    if sync_method == 'hogwild':
+        return lambda: hogwild.run(worker_hosts, ps_hosts, job_name, FLAGS.task_index, FLAGS.log_name, FLAGS.opt)
+    elif sync_method == 'coop':
+        return lambda: cooptimization.run(worker_hosts, ps_hosts, job_name, FLAGS.task_index,
+                                          FLAGS.log_name, FLAGS.opt, FLAGS.predict_future, sharpness)
+    else:
+        raise ValueError("Unrecognized synchronization method: %s" % sync_method)
+
+
 def main():
     parser = setup_parser()
     FLAGS, unparsed = parser.parse_known_args()
@@ -74,6 +107,7 @@ def main():
     if not job_name in ['ps', 'worker']:
         raise ValueError("Job name must be one of 'ps' or 'worker'")
     
+    # Use redis queue to check that all workers are online
     observed_workers = 0
     r = redis.StrictRedis(host=REDIS_HOST, port=6379, db=0)
     unique_name = "('%s', %d)" % (host, FLAGS.task_index)
@@ -95,8 +129,9 @@ def main():
     ps = decode_list(r.lrange(job_id('ps'), 0, -1))
     ps_hosts = ['%s:%d' % (hostname, i + 2210) for hostname, i in ps]
     print(worker_hosts, ps_hosts, job_id(job_name), FLAGS.task_index)
+    run = get_runner(FLAGS.sync, FLAGS)
     try:
-        hogwild.run(worker_hosts, ps_hosts, job_name, FLAGS.task_index, FLAGS.log_name, FLAGS.opt)
+        run(worker_hosts, ps_hosts, job_name, FLAGS.task_index, FLAGS.log_name, FLAGS.opt)
         r.lrem(job_id(job_name), 1, unique_name) # cleanup
     except Exception:
         with open('%s_%s.errors' % (job_id(job_name), FLAGS.task_index), 'w') as f:
