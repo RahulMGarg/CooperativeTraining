@@ -89,10 +89,10 @@ def decode_list(redis_list):
 
 def get_runner(sync_method, FLAGS):
     if sync_method == 'hogwild':
-        return lambda: hogwild.run(worker_hosts, ps_hosts, job_name, FLAGS.task_index, FLAGS.log_name, FLAGS.opt)
+        return lambda worker_hosts, ps_hosts, job_name, task_index, log_name: hogwild.run(worker_hosts, ps_hosts, job_name, task_index, log_name, FLAGS.opt)
     elif sync_method == 'coop':
-        return lambda: cooptimization.run(worker_hosts, ps_hosts, job_name, FLAGS.task_index,
-                                          FLAGS.log_name, FLAGS.opt, FLAGS.predict_future, sharpness)
+        return lambda worker_hosts, ps_hosts, job_name, task_index, log_name: cooptimization.run(worker_hosts, ps_hosts, job_name, task_index,
+                                          log_name, FLAGS.opt, FLAGS.predict_future, FLAGS.sharpness)
     else:
         raise ValueError("Unrecognized synchronization method: %s" % sync_method)
 
@@ -131,7 +131,7 @@ def main():
     print(worker_hosts, ps_hosts, job_id(job_name), FLAGS.task_index)
     run = get_runner(FLAGS.sync, FLAGS)
     try:
-        run(worker_hosts, ps_hosts, job_name, FLAGS.task_index, FLAGS.log_name, FLAGS.opt)
+        run(worker_hosts, ps_hosts, job_name, FLAGS.task_index, FLAGS.log_name)
         r.lrem(job_id(job_name), 1, unique_name) # cleanup
     except Exception:
         with open('%s_%s.errors' % (job_id(job_name), FLAGS.task_index), 'w') as f:
