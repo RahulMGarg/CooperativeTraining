@@ -46,6 +46,14 @@ def setup_parser():
     )
 
     parser.add_argument(
+        "--opt",
+        type=str,
+        default="sgd",
+        help="Optimizer: sgd or adam currently"
+    )
+
+
+    parser.add_argument(
         "--experiment_name",
         type=str,
         default='',
@@ -88,7 +96,7 @@ def main():
     ps_hosts = ['%s:%d' % (hostname, i + 2210) for hostname, i in ps]
     print(worker_hosts, ps_hosts, job_id(job_name), FLAGS.task_index)
     try:
-        hogwild.run(worker_hosts, ps_hosts, job_name, FLAGS.task_index, FLAGS.log_name)
+        hogwild.run(worker_hosts, ps_hosts, job_name, FLAGS.task_index, FLAGS.log_name, FLAGS.opt)
         r.lrem(job_id(job_name), 1, unique_name) # cleanup
     except Exception:
         with open('%s_%s.errors' % (job_id(job_name), FLAGS.task_index), 'w') as f:
