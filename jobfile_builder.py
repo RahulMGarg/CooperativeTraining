@@ -12,6 +12,7 @@ ada_template = """#!/bin/sh
 #PBS -q {% if gpu %}nvidia{% else %}batch{% endif %}
 #PBS -l walltime={{ walltime }}
 #PBS -l mem={{ memory }}
+#PBS -l nodes=1:ppn=1
 #PBS -j eo
 #PBS -N {{ name }}
 #PBS -t {{ start_job }}{% if multiple_jobs %}-{{ end_job }}{% endif %}
