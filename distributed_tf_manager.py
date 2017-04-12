@@ -8,7 +8,6 @@ ps_jobstring = 'hostname > {model}_ps_host.txt; python {model}.py --worker_hosts
 ada_nodes = ['ada{}:{}'.format(i, 2223+j) for i in range(17,22) for j in range(4)]
 
 def main():
-    portrange = range(2223,2227)
     experiment = 'hogwild'
     workerhosts = ada_nodes
     pshost = 'localhost'

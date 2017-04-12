@@ -20,9 +20,9 @@ cd {{ path }}
 {% if gpu %}export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:"{{ cuda_path }}lib64"
 export C_INCLUDE_PATH=$C_INCLUDE_PATH:"{{ cuda_path }}include"
 export CPLUS_INCLUDE_PATH=$CPLUS_INCLUDE_PATH:"{{ cuda_path }}include"
-export PATH=$PATH:"{{ cuda_path }}bin"{% endif %}
+export PATH=$PATH:"{{ cuda_path }}bin"
+eval $(python {{ cuda_assigner }}run_client.py --request --jobid $PBS_ARRAYID){% endif %}
 
-eval $(python {{ cuda_assigner }}run_client.py --request --jobid $PBS_ARRAYID)
 {% if theano %}export THEANO_FLAGS="device=gpu0,floatX=float32,base_compiledir=/global/scratch/jasonhar/.theano/{{ name }}-$PBS_ARRAYID"{% endif %}
 {% for item in preamble %}{{ item }}{% endfor %}
 case $PBS_ARRAYID in
@@ -32,7 +32,8 @@ esac
 
 {% if theano %}
 \\rm -r /global/scratch/jasonhar/.theano/simple_exp_nnet_1000-$PBS_ARRAYID
-{% endif %}eval $(python {{ cuda_assigner }}run_client.py --release --jobid $PBS_ARRAYID)
+{% endif %}
+{% if gpu %}eval $(python {{ cuda_assigner }}run_client.py --release --jobid $PBS_ARRAYID){% endif %}
 """
 
 def format_joblist(joblist, zero_index):

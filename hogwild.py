@@ -64,7 +64,7 @@ def run(worker_hosts, ps_hosts, job_name, task_index, logname="hogwild", opt="sg
       if opt == 'adam':
           opt = tf.train.AdamOptimizer(0.01)
       elif opt == 'sgd':
-          opt = tf.train.GradientDescentOptimizer(0.01)
+          opt = tf.train.GradientDescentOptimizer(0.0001)
       else:
           raise ValueError('Unrecognised optimizer %s' % opt)
 
