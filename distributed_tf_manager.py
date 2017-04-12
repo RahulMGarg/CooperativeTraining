@@ -1,25 +1,25 @@
+import os
 import argparse
 import subprocess
 
 from jobfile_builder import populate_template, write_pbs_file
 
-def build_jobstring(log_name='TEST', sync='hogwild', opt='sgd', predict_future=False, sharpness=20.):
-    jobstring_template = "python torque_manager.py --log_name {log_name} --sync {sync} --opt {opt} --sharpness {sharpness}"
+def build_jobstring(log_name='TEST', sync='hogwild', opt='sgd', predict_future=False, sharpness=20., lr=0.01):
+    jobstring_template = "python torque_manager.py --log_name {log_name} --sync {sync} --opt {opt} --sharpness {sharpness} --lr {lr}"
     if predict_future: 
         jobstring_template += ' --predict_future'
-    js = jobstring_template.format(log_name=log_name,sync=sync, opt=opt, sharpness=sharpness) 
+    js = jobstring_template.format(log_name=log_name,sync=sync, opt=opt, sharpness=sharpness, lr=lr) 
     js += " --task_index {task_index} --n_workers {n_workers}"
     return js
 
-def build_joblist(n_workers, log_name='TEST', sync='hogwild', opt='sgd', predict_future=False, sharpness=20.):
-    jobstring = build_jobstring(log_name=log_name, sync=sync, opt=opt, predict_future=predict_future, sharpness=sharpness)
+def build_joblist(n_workers, log_name='TEST', sync='hogwild', opt='sgd', predict_future=False, sharpness=20., lr=0.01):
+    jobstring = build_jobstring(log_name=log_name, sync=sync, opt=opt, predict_future=predict_future, sharpness=sharpness, lr=lr)
     joblist = [(jobstring + ' --job_name ps').format(task_index=0, n_workers=n_workers)]
     joblist += [(jobstring + ' --job_name worker').format(task_index=i, n_workers=n_workers) for i in range(n_workers)]
     return joblist
 
 def launch_job(filename, server='vickrey'):
-    command = "echo ssh {server} 'qsub {filename}'".format(server=server, filename=filename)
-    print command
+    command = "ssh {server} 'qsub {filename}'".format(server=server, filename=filename)
     output = subprocess.check_output([command], shell=True).strip()
     print(output)
 
@@ -27,12 +27,12 @@ def main():
     args = parse_args()
 
     joblist = build_joblist(args.n_workers, log_name=args.name, sync=args.sync, opt=args.opt,
-                            predict_future=args.predict_future, sharpness=args.sharpness)
+                            predict_future=args.predict_future, sharpness=args.sharpness, lr=args.lr)
     pbs_text = populate_template(name=args.name, joblist=joblist, gpu=args.gpu, 
                             theano=False, zero_index=True)
     write_pbs_file(args.name + '.pbs', pbs_text)
     if args.launch:
-        launch_job(args.name + '.pbs')
+        launch_job(os.path.abspath(args.name + '.pbs'))
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -77,6 +77,13 @@ def parse_args():
         action="store_true",
         default=False,
         help="Predict future states."
+    )
+
+    parser.add_argument(
+        "--lr",
+        type=float,
+        default=0.01,
+        help="The initial learning rate for our optimizers."
     )
 
     parser.add_argument(

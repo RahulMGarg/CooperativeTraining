@@ -26,7 +26,7 @@ def _p(s, p):
         s = '%s_%s' % (p, s)
     return s
 
-def run(worker_hosts, ps_hosts, job_name, task_index, logname="hogwild", opt="sgd"):
+def run(worker_hosts, ps_hosts, job_name, task_index, logname="hogwild", opt="sgd", lr=0.01):
   EXPERIMENT = "/%s/" % logname
   settings = locals()
   data_sets = input_data.read_data_sets(DATA_DIR, one_hot=True)
@@ -62,9 +62,9 @@ def run(worker_hosts, ps_hosts, job_name, task_index, logname="hogwild", opt="sg
       tf.summary.scalar('loss', loss)
 
       if opt == 'adam':
-          opt = tf.train.AdamOptimizer(0.01)
+          opt = tf.train.AdamOptimizer(lr)
       elif opt == 'sgd':
-          opt = tf.train.GradientDescentOptimizer(0.0001)
+          opt = tf.train.GradientDescentOptimizer(lr)
       else:
           raise ValueError('Unrecognised optimizer %s' % opt)
 

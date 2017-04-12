@@ -88,11 +88,11 @@ def build_model(images, num_classes=10, name_scope=None):
             net = slim.fully_connected(net, num_classes, activation_fn=None)       
             return net
 
-def select_optimizer(opt):
+def select_optimizer(opt, lr):
     if opt == 'adam':
-        return tf.train.AdamOptimizer(0.01)
+        return tf.train.AdamOptimizer(lr)
     elif opt == 'sgd':
-        return tf.train.GradientDescentOptimizer(0.01)
+        return tf.train.GradientDescentOptimizer(lr)
     else:
         raise ValueError('Unrecognised optimizer %s' % opt)
 
@@ -138,10 +138,10 @@ LOG_LOCATION = DEFAULT_BASE_DIRECTORY + "/distributed_training/"
 DATA_DIR = DEFAULT_BASE_DIRECTORY + "/tensorflow/mnist/input_data"
 EXPERIMENT = "/hogwild/"
 BATCH_SIZE = 100
-MAX_STEPS = 1000000
+MAX_STEPS = 100000
 
 def run(worker_hosts, ps_hosts, job_name, task_index,
-        logname="cooptimzation", opt_name="adam", predict_future=False, sharpness=2.):
+        logname="cooptimzation", opt_name="adam", predict_future=False, sharpness=2., lr=0.01):
   EXPERIMENT = "/%s/" % logname
   settings = locals()
   data_sets = input_data.read_data_sets(DATA_DIR, one_hot=True)
@@ -181,7 +181,7 @@ def run(worker_hosts, ps_hosts, job_name, task_index,
 
       tf.summary.scalar('loss', loss)
 
-      opt = select_optimizer(opt_name)
+      opt = select_optimizer(opt_name, lr)
 
       get_ps_state_op = copy_variables(local_variables, ps_variables)
       grads_and_vars = opt.compute_gradients(loss, local_variables)

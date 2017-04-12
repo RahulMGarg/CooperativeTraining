@@ -63,6 +63,13 @@ def setup_parser():
     )
 
     parser.add_argument(
+        "--lr",
+        type=float,
+        default=0.01,
+        help="The initial learning rate for the optimizers"
+    )
+
+    parser.add_argument(
         "--sharpness",
         type=float,
         default=2.,
@@ -89,10 +96,10 @@ def decode_list(redis_list):
 
 def get_runner(sync_method, FLAGS):
     if sync_method == 'hogwild':
-        return lambda worker_hosts, ps_hosts, job_name, task_index, log_name: hogwild.run(worker_hosts, ps_hosts, job_name, task_index, log_name, FLAGS.opt)
+        return lambda worker_hosts, ps_hosts, job_name, task_index, log_name: hogwild.run(worker_hosts, ps_hosts, job_name, task_index, log_name, FLAGS.opt, lr=FLAGS.lr)
     elif sync_method == 'coop':
         return lambda worker_hosts, ps_hosts, job_name, task_index, log_name: cooptimization.run(worker_hosts, ps_hosts, job_name, task_index,
-                                          log_name, FLAGS.opt, FLAGS.predict_future, FLAGS.sharpness)
+                                          log_name, FLAGS.opt, FLAGS.predict_future, FLAGS.sharpness, lr=FLAGS.lr)
     else:
         raise ValueError("Unrecognized synchronization method: %s" % sync_method)
 
