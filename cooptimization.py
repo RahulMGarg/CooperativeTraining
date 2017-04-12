@@ -48,7 +48,7 @@ class OnlineUpdate(object):
             predict_op.append(tf.assign(p, prediction))
         return predict_op
     
-    def update_variables(self, true_values, lr = 0.0001, update='sgd', eps = 1e-6):
+    def update_variables(self, true_values, lr = 0.01, update='sgd', eps = 1e-6):
         update_op = []
         if update == 'adagrad':
             h_list = []
@@ -141,7 +141,7 @@ BATCH_SIZE = 100
 MAX_STEPS = 1000000
 
 def run(worker_hosts, ps_hosts, job_name, task_index,
-        logname="cooptimzation", opt="adam", predict_future=False, sharpness=2.):
+        logname="cooptimzation", opt_name="adam", predict_future=False, sharpness=2.):
   EXPERIMENT = "/%s/" % logname
   settings = locals()
   data_sets = input_data.read_data_sets(DATA_DIR, one_hot=True)
@@ -181,7 +181,7 @@ def run(worker_hosts, ps_hosts, job_name, task_index,
 
       tf.summary.scalar('loss', loss)
 
-      opt = select_optimizer(opt)
+      opt = select_optimizer(opt_name)
 
       get_ps_state_op = copy_variables(local_variables, ps_variables)
       grads_and_vars = opt.compute_gradients(loss, local_variables)
@@ -202,8 +202,11 @@ def run(worker_hosts, ps_hosts, job_name, task_index,
       for (g_loc, v_loc), v_ps in zip(grads_and_vars, ps_variables):
         weighted_grads_and_vars.append((g_loc * lr_offset, v_ps))
       train_op = opt.apply_gradients(weighted_grads_and_vars, global_step)
-      optimizer_variables = [opt.get_slot(v, n) for n in opt.get_slot_names() for _, v in weighted_grads_and_vars]
-      optimizer_variables += list(opt._get_beta_accumulators()) #TODO: get rid of this
+      if opt_name == "adam":
+        optimizer_variables = [opt.get_slot(v, n) for n in opt.get_slot_names() for _, v in weighted_grads_and_vars]
+        optimizer_variables += list(opt._get_beta_accumulators()) #TODO: get rid of this
+      else:
+        optimizer_variables = []
 
       correct_prediction = tf.equal(tf.argmax(logits, 1), tf.argmax(labels, 1))
       accuracy = tf.reduce_mean(tf.cast(correct_prediction, "float"))
@@ -239,8 +242,9 @@ def run(worker_hosts, ps_hosts, job_name, task_index,
         uninitialized = sess.run(tf.report_uninitialized_variables(tf.global_variables()))
         while (len(uninitialized) > 0):
             with open(log_file, 'a') as f:
-                f.write('Waiting for initialization\n')
-                time.sleep(5)
+                f.write('Waiting for initialization for the following variables: %s\n' % ','.join(uninitialized))
+                time.sleep(2)
+            uninitialized = sess.run(tf.report_uninitialized_variables(tf.global_variables()))
 
       print('Starting training')
       with open(log_file, 'a') as f:
