@@ -1,4 +1,6 @@
 import argparse
+import subprocess
+
 from jobfile_builder import populate_template, write_pbs_file
 
 def build_jobstring(log_name='TEST', sync='hogwild', opt='sgd', predict_future=False, sharpness=20.):
@@ -15,6 +17,12 @@ def build_joblist(n_workers, log_name='TEST', sync='hogwild', opt='sgd', predict
     joblist += [(jobstring + ' --job_name worker').format(task_index=i, n_workers=n_workers) for i in range(n_workers)]
     return joblist
 
+def launch_job(filename, server='vickrey'):
+    command = "echo ssh {server} 'qsub {filename}'".format(server=server, filename=filename)
+    print command
+    output = subprocess.check_output([command], shell=True).strip()
+    print(output)
+
 def main():
     args = parse_args()
 
@@ -23,9 +31,18 @@ def main():
     pbs_text = populate_template(name=args.name, joblist=joblist, gpu=args.gpu, 
                             theano=False, zero_index=True)
     write_pbs_file(args.name + '.pbs', pbs_text)
+    if args.launch:
+        launch_job(args.name + '.pbs')
 
 def parse_args():
     parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        "--launch",
+        action="store_true",
+        help="Launch the job immediately"
+    )
+
     parser.add_argument(
         "--name",
         type=str,
