@@ -82,6 +82,8 @@ def run(worker_hosts, ps_hosts, job_name, task_index, logname="hogwild", opt="sg
                     is_chief=is_chief, init_op=global_init,
                     summary_op=None, checkpoint_basename='%s.ckpt' % logname)
 
+    with open(log_file, 'a') as f:
+      f.write('Ready to train\n')
     with sv.managed_session(server.target) as sess:
       print('Starting training')
       with open(log_file, 'a') as f:
@@ -90,7 +92,7 @@ def run(worker_hosts, ps_hosts, job_name, task_index, logname="hogwild", opt="sg
         batch_x, batch_y = data_sets.train.next_batch(BATCH_SIZE, False)
         feed_dict = {images: batch_x.reshape((-1,28,28,1)), labels: batch_y}
         _, cost, step = sess.run([train_op, loss, global_step], feed_dict=feed_dict)
-        if is_chief and step % 100 == 0:
+        if is_chief and step % 1 == 0:
             sv.summary_computed(sess, sess.run(merged_summaries, feed_dict=feed_dict))
         
         log_message = 'Step: %d, cost: %f' % (step, cost)
